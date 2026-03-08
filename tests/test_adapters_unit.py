@@ -441,3 +441,239 @@ class TestNextcloudTalkAdapter:
         status = await adapter.get_status()
         assert status.connected is False
         assert status.account_id == "bot"
+
+
+# ── IRC adapter edge cases ─────────────────────────────────────────────────
+
+class TestIRCAdapterEdgeCases:
+    def test_custom_channel_list(self):
+        from unified_channel.adapters.irc import IRCAdapter
+        adapter = IRCAdapter(server="irc.test.com", nickname="bot", channels=["#a", "#b"])
+        assert adapter.channel_id == "irc"
+
+    def test_default_nickname(self):
+        from unified_channel.adapters.irc import IRCAdapter
+        adapter = IRCAdapter(server="irc.test.com")
+        assert adapter._nickname is not None
+
+    @pytest.mark.asyncio
+    async def test_process_empty_message(self):
+        from unified_channel.adapters.irc import IRCAdapter
+        adapter = IRCAdapter(server="irc.test.com", nickname="bot")
+        adapter._connected = True
+        # Non-PRIVMSG lines should be silently ignored
+        await adapter._process_line(":server 001 bot :Welcome")
+        assert adapter._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_command_with_multiple_args(self):
+        from unified_channel.adapters.irc import IRCAdapter
+        adapter = IRCAdapter(server="irc.test.com", command_prefix="!")
+        adapter._connected = True
+
+        await adapter._process_line(":alice!a@h PRIVMSG #chan :!deploy prod --force --verbose")
+        msg = await asyncio.wait_for(adapter._queue.get(), timeout=1)
+        assert msg.content.type == ContentType.COMMAND
+        assert msg.content.command == "deploy"
+        assert "prod" in msg.content.args
+
+
+# ── WhatsApp adapter edge cases ─────────────────────────────────────────────
+
+class TestWhatsAppEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        mock_httpx = MagicMock()
+        with patch.dict(sys.modules, {"httpx": mock_httpx, "aiohttp": MagicMock(), "aiohttp.web": MagicMock()}):
+            from unified_channel.adapters.whatsapp import WhatsAppAdapter
+            return WhatsAppAdapter(
+                access_token="test",
+                phone_number_id="123",
+                verify_token="verify",
+            )
+
+    def test_channel_id(self, adapter):
+        assert adapter.channel_id == "whatsapp"
+
+    @pytest.mark.asyncio
+    async def test_status_disconnected(self, adapter):
+        status = await adapter.get_status()
+        assert status.connected is False
+        assert status.channel == "whatsapp"
+
+    @pytest.mark.asyncio
+    async def test_process_command_with_args(self, adapter):
+        wa_msg = {
+            "id": "wamid.cmd",
+            "from": "+1234567890",
+            "type": "text",
+            "timestamp": "1700000000",
+            "text": {"body": "/deploy staging --force"},
+        }
+        await adapter._process_message(wa_msg, {})
+        msg = await asyncio.wait_for(adapter._queue.get(), timeout=1)
+        assert msg.content.type == ContentType.COMMAND
+        assert msg.content.command == "deploy"
+        assert "staging" in msg.content.args
+
+
+# ── Mattermost adapter edge cases ──────────────────────────────────────────
+
+class TestMattermostEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(sys.modules, {"httpx": MagicMock(), "websockets": MagicMock()}):
+            from unified_channel.adapters.mattermost import MattermostAdapter
+            a = MattermostAdapter(url="https://mm.test", token="tok")
+            a._bot_user_id = "bot123"
+            a._connected = True
+            return a
+
+    def test_channel_id(self, adapter):
+        assert adapter.channel_id == "mattermost"
+
+    @pytest.mark.asyncio
+    async def test_status_connected(self, adapter):
+        status = await adapter.get_status()
+        assert status.connected is True
+        assert status.channel == "mattermost"
+
+    @pytest.mark.asyncio
+    async def test_empty_post_data_produces_empty_message(self, adapter):
+        """Event with no post data still produces a message (adapter doesn't filter events)."""
+        event = {"event": "posted", "data": {}}
+        await adapter._process_post(event)
+        msg = await asyncio.wait_for(adapter._queue.get(), timeout=1)
+        assert msg.channel == "mattermost"
+        assert msg.content.text == ""
+
+
+# ── Twitch adapter edge cases ──────────────────────────────────────────────
+
+class TestTwitchEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(sys.modules, {"websockets": MagicMock()}):
+            from unified_channel.adapters.twitch import TwitchAdapter
+            a = TwitchAdapter(
+                oauth_token="oauth:test", bot_username="testbot",
+                channels=["#testchan"], command_prefix="!",
+            )
+            a._connected = True
+            return a
+
+    def test_channel_id(self, adapter):
+        assert adapter.channel_id == "twitch"
+
+    @pytest.mark.asyncio
+    async def test_status_connected(self, adapter):
+        status = await adapter.get_status()
+        assert status.connected is True
+        assert status.channel == "twitch"
+
+    @pytest.mark.asyncio
+    async def test_process_multiword_message(self, adapter):
+        line = ":user1!user1@user1.tmi.twitch.tv PRIVMSG #testchan :this is a long message with many words"
+        await adapter._process_line(line)
+        msg = await asyncio.wait_for(adapter._queue.get(), timeout=1)
+        assert msg.content.text == "this is a long message with many words"
+        assert msg.content.type == ContentType.TEXT
+
+    @pytest.mark.asyncio
+    async def test_non_privmsg_ignored(self, adapter):
+        line = ":tmi.twitch.tv 001 testbot :Welcome, GLHF!"
+        await adapter._process_line(line)
+        assert adapter._queue.empty()
+
+
+# ── Zalo adapter edge cases ────────────────────────────────────────────────
+
+class TestZaloEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(sys.modules, {"httpx": MagicMock(), "aiohttp": MagicMock(), "aiohttp.web": MagicMock()}):
+            from unified_channel.adapters.zalo import ZaloAdapter
+            return ZaloAdapter(access_token="tok")
+
+    def test_channel_id(self, adapter):
+        assert adapter.channel_id == "zalo"
+
+    @pytest.mark.asyncio
+    async def test_status_disconnected(self, adapter):
+        status = await adapter.get_status()
+        assert status.connected is False
+        assert status.channel == "zalo"
+
+
+# ── BlueBubbles adapter edge cases ─────────────────────────────────────────
+
+class TestBlueBubblesEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(sys.modules, {"httpx": MagicMock()}):
+            from unified_channel.adapters.bluebubbles import BlueBubblesAdapter
+            return BlueBubblesAdapter(server_url="http://localhost:1234", password="pw")
+
+    def test_channel_id_default(self, adapter):
+        assert adapter.channel_id == "bluebubbles"
+
+    @pytest.mark.asyncio
+    async def test_status_disconnected(self, adapter):
+        status = await adapter.get_status()
+        assert status.connected is False
+        assert status.channel == "bluebubbles"
+
+
+# ── Synology Chat edge cases ──────────────────────────────────────────────
+
+class TestSynologyChatEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(sys.modules, {"httpx": MagicMock(), "aiohttp": MagicMock(), "aiohttp.web": MagicMock()}):
+            from unified_channel.adapters.synology_chat import SynologyChatAdapter
+            return SynologyChatAdapter(incoming_webhook_url="https://nas/hook")
+
+    @pytest.mark.asyncio
+    async def test_status_has_correct_channel(self, adapter):
+        status = await adapter.get_status()
+        assert status.channel == "synology-chat"
+        assert status.connected is False
+
+
+# ── Nextcloud Talk edge cases ──────────────────────────────────────────────
+
+class TestNextcloudTalkEdgeCases:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(sys.modules, {"httpx": MagicMock()}):
+            from unified_channel.adapters.nextcloud_talk import NextcloudTalkAdapter
+            return NextcloudTalkAdapter(
+                server_url="https://nc.test",
+                username="admin", password="secret",
+            )
+
+    def test_custom_username_in_status(self, adapter):
+        # account_id should reflect the username
+        assert adapter._username == "admin"
+
+    @pytest.mark.asyncio
+    async def test_status_account_id(self, adapter):
+        status = await adapter.get_status()
+        assert status.account_id == "admin"
+
+
+# ── iMessage adapter edge cases ───────────────────────────────────────────
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS only")
+class TestIMessageEdgeCases:
+    def test_default_construction(self):
+        from unified_channel.adapters.imessage import IMessageAdapter
+        adapter = IMessageAdapter()
+        assert adapter.channel_id == "imessage"
+
+    @pytest.mark.asyncio
+    async def test_status_channel_field(self):
+        from unified_channel.adapters.imessage import IMessageAdapter
+        adapter = IMessageAdapter()
+        status = await adapter.get_status()
+        assert status.channel == "imessage"

@@ -258,3 +258,161 @@ async def test_sync_handler_with_msg():
 
     result = await _run_pipeline(manager, _make_msg(command="who"))
     assert result == "sender=u1"
+
+
+@pytest.mark.asyncio
+async def test_expose_handler_raises_exception():
+    """Exception in handler returns friendly error message."""
+    bridge, manager = _make_bridge()
+
+    async def fail(args: list[str]) -> str:
+        raise ValueError("something broke")
+
+    bridge.expose("fail", fail)
+
+    result = await _run_pipeline(manager, _make_msg(command="fail"))
+    assert result is not None
+    assert "Error running /fail" in result
+    assert "something broke" in result
+
+
+@pytest.mark.asyncio
+async def test_expose_no_arg_handler():
+    """Handler with no parameters still works (receives args but ignores)."""
+    bridge, manager = _make_bridge()
+
+    async def noargs(args: list[str]) -> str:
+        return "no args needed"
+
+    bridge.expose("noargs", noargs)
+
+    result = await _run_pipeline(manager, _make_msg(command="noargs"))
+    assert result == "no args needed"
+
+
+@pytest.mark.asyncio
+async def test_expose_status_async():
+    """expose_status with async handler works."""
+    bridge, manager = _make_bridge()
+
+    async def status_check(args: list[str]) -> str:
+        return "healthy: 42 connections"
+
+    bridge.expose_status(status_check)
+
+    result = await _run_pipeline(manager, _make_msg(command="status"))
+    assert result == "healthy: 42 connections"
+
+
+@pytest.mark.asyncio
+async def test_multiple_commands_in_sequence():
+    """Multiple commands can be called in sequence."""
+    bridge, manager = _make_bridge()
+
+    async def cmd_a(args: list[str]) -> str:
+        return "result_a"
+
+    async def cmd_b(args: list[str]) -> str:
+        return "result_b"
+
+    bridge.expose("a", cmd_a)
+    bridge.expose("b", cmd_b)
+
+    result_a = await _run_pipeline(manager, _make_msg(command="a"))
+    result_b = await _run_pipeline(manager, _make_msg(command="b"))
+    result_a2 = await _run_pipeline(manager, _make_msg(command="a"))
+
+    assert result_a == "result_a"
+    assert result_b == "result_b"
+    assert result_a2 == "result_a"
+
+
+@pytest.mark.asyncio
+async def test_flag_parsing_mixed():
+    """--flag parsing with mixed positional and flag args."""
+    bridge, manager = _make_bridge()
+    captured = {}
+
+    async def deploy(args: list[str], msg: UnifiedMessage) -> str:
+        captured["args"] = args
+        captured["flags"] = msg.metadata.get("_flags", {})
+        return "ok"
+
+    bridge.expose("deploy", deploy)
+
+    msg = _make_msg(command="deploy", args=["prod", "--force", "--count", "5", "extra"])
+    await _run_pipeline(manager, msg)
+    assert captured["args"] == ["prod", "extra"]
+    assert captured["flags"]["force"] == "true"
+    assert captured["flags"]["count"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_unknown_command_returns_none():
+    """Unknown command falls through (no help suggestion, just None)."""
+    bridge, manager = _make_bridge()
+
+    result = await _run_pipeline(manager, _make_msg(command="nonexistent"))
+    # Falls through to fallback handler (None by default)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_empty_args_handling():
+    """Handler called with empty args list."""
+    bridge, manager = _make_bridge()
+
+    async def cmd(args: list[str]) -> str:
+        return f"count={len(args)}"
+
+    bridge.expose("cmd", cmd)
+
+    result = await _run_pipeline(manager, _make_msg(command="cmd", args=[]))
+    assert result == "count=0"
+
+
+@pytest.mark.asyncio
+async def test_handler_returns_none():
+    """Handler returning None produces None result."""
+    bridge, manager = _make_bridge()
+
+    async def silent(args: list[str]) -> str:
+        return None  # type: ignore[return-value]
+
+    bridge.expose("silent", silent)
+
+    result = await _run_pipeline(manager, _make_msg(command="silent"))
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_large_argument_list():
+    """Handler receives many arguments correctly."""
+    bridge, manager = _make_bridge()
+
+    async def many_args(args: list[str]) -> str:
+        return f"count={len(args)}"
+
+    bridge.expose("many", many_args)
+
+    args = [f"arg{i}" for i in range(50)]
+    result = await _run_pipeline(manager, _make_msg(command="many", args=args))
+    assert result == "count=50"
+
+
+@pytest.mark.asyncio
+async def test_custom_prefix():
+    """ServiceBridge with custom prefix still generates help with that prefix."""
+    manager = ChannelManager()
+    manager.add_channel(_StubAdapter())
+    bridge = ServiceBridge(manager, prefix="!")
+
+    async def ping(args: list[str]) -> str:
+        return "pong"
+
+    bridge.expose("ping", ping, description="Ping test")
+
+    result = await _run_pipeline(manager, _make_msg(command="help"))
+    assert result is not None
+    assert "!help" in result
+    assert "!ping" in result
