@@ -2,25 +2,62 @@
 
 > **The missing messaging layer for AI Agents.** 18 channels, 1 unified API. Python, TypeScript, Java, and MCP Server.
 
-Building an AI agent that talks to users? You need messaging. But every platform has its own SDK, auth flow, message format, and quirks. **unified-channel** gives your agent a single interface to reach users on Telegram, Discord, Slack, WhatsApp, and 14 more channels — with zero lock-in.
+Turn any service into something you can manage from your phone. Deploy, restart, check logs, view metrics — all from a Telegram chat (or Discord, Slack, WhatsApp, and 14 more channels). No custom bot framework needed. Just expose your functions and go.
 
-**New: MCP Server** — any MCP-compatible AI agent (Claude, GPT, local LLMs) can send/receive messages across all 18 channels via standard tool calls.
+**Also great for**: AI agent messaging, customer support bots, DevOps alerts, and anything else that needs a multi-platform messaging layer.
+
+**New: MCP Server** — AI agents (Claude, GPT, local LLMs) can also control your services and send messages via standard MCP tool calls.
+
+## Core Value: A Remote Control Panel in Your Pocket
+
+**Any Service + unified-channel = full remote management via IM.**
+
+You have a service running somewhere — a deployment pipeline, a monitoring stack, a home automation system, a GPU cluster. You want to check on it, restart things, view logs, run commands — but you're on your phone, on a train, at dinner.
+
+With unified-channel's `ServiceBridge`, you expose your service functions as chat commands in 4 lines:
+
+```python
+from unified_channel import ChannelManager, ServiceBridge
+from unified_channel.adapters.telegram import TelegramAdapter
+
+manager = ChannelManager()
+manager.add_channel(TelegramAdapter("BOT_TOKEN"))
+
+bridge = ServiceBridge(manager)
+bridge.expose("deploy", deploy_service, description="Deploy service")
+bridge.expose("logs", get_logs, description="View logs")
+bridge.expose("restart", restart_service, description="Restart service")
+bridge.expose("metrics", get_metrics, description="View metrics")
+
+await manager.run()
+```
+
+Now from your phone (Telegram, Discord, wherever):
 
 ```
-Your AI Agent
-     │
-     ▼
-┌─────────────────────────────────────────┐
-│           unified-channel               │
-│                                         │
-│  [Access] → [Commands] → [Your Logic]  │
-│                                         │
-│  Telegram │ Discord │ Slack │ WhatsApp  │
-│  iMessage │ Matrix  │ Teams │ LINE      │
-│  Feishu   │ Mattermost │ Google Chat   │
-│  Nextcloud│ Synology│ Zalo  │ Nostr     │
-│  BlueBubbles │ Twitch │ IRC            │
-└─────────────────────────────────────────┘
+/deploy prod v2.1     → ✅ deployed to prod
+/logs api --tail 50   → [last 50 log lines]
+/restart worker-3     → ✅ restarted
+/metrics              → CPU: 23% | Mem: 4.2GB | QPS: 1.2k
+```
+
+**This is not a chatbot framework.** It's a remote control plane for your services that happens to use IM as the transport. Your phone becomes a terminal to anything you can write a Python/TypeScript/Java function for.
+
+And because it supports MCP, AI agents can control your services too — same exposed functions, accessible as MCP tools.
+
+```
+┌──────────────────────────────────────────────┐
+│               unified-channel                │
+│                                              │
+│  Your Phone (IM)  ──→  ServiceBridge  ──→  Your Service
+│  AI Agent (MCP)   ──→  MCP Server    ──→  Functions
+│                                              │
+│  Telegram │ Discord │ Slack │ WhatsApp       │
+│  iMessage │ Matrix  │ Teams │ LINE           │
+│  Feishu   │ Mattermost │ Google Chat         │
+│  Nextcloud│ Synology│ Zalo  │ Nostr          │
+│  BlueBubbles │ Twitch │ IRC                  │
+└──────────────────────────────────────────────┘
 ```
 
 ## Why unified-channel?
@@ -139,11 +176,13 @@ Incoming Message → [Middleware 1] → [Middleware 2] → ... → [Fallback Han
 
 ## Use Cases
 
-- **AI Chat Agents**: Deploy your LLM-powered agent across multiple platforms from one codebase
-- **Customer Support Bots**: Unified inbox across Telegram, WhatsApp, LINE, and web chat
-- **DevOps Notifications**: Broadcast alerts to Slack, Discord, and Mattermost simultaneously
-- **Community Management**: Single bot logic serving Discord, Telegram, and Matrix communities
-- **IoT/Home Automation**: Control smart home via iMessage, Telegram, or any channel
+- **Remote Service Management** (primary): Manage deployments, view logs, restart services, check metrics — all from your phone via Telegram/Discord/Slack. `ServiceBridge` turns any set of functions into a remote control panel.
+- **GPU Cluster / ML Ops**: Monitor training jobs, check GPU utilization, cancel runs, pull results — from a chat on your phone.
+- **IoT / Home Automation**: Control smart home devices, check sensor readings, trigger routines via iMessage, Telegram, or any channel.
+- **AI Chat Agents**: Deploy your LLM-powered agent across multiple platforms from one codebase.
+- **DevOps Alerts**: Broadcast CI/CD, monitoring, and incident alerts to Slack, Discord, and Mattermost simultaneously.
+- **Customer Support Bots**: Unified inbox across Telegram, WhatsApp, LINE, and web chat.
+- **Community Management**: Single bot logic serving Discord, Telegram, and Matrix communities.
 
 ## MCP Server (for AI Agents)
 
