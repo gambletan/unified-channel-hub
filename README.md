@@ -1,8 +1,10 @@
 # unified-channel
 
-> **The missing messaging layer for AI Agents.** 18 channels, 1 unified API. Python, TypeScript, and Java.
+> **The missing messaging layer for AI Agents.** 18 channels, 1 unified API. Python, TypeScript, Java, and MCP Server.
 
 Building an AI agent that talks to users? You need messaging. But every platform has its own SDK, auth flow, message format, and quirks. **unified-channel** gives your agent a single interface to reach users on Telegram, Discord, Slack, WhatsApp, and 14 more channels — with zero lock-in.
+
+**New: MCP Server** — any MCP-compatible AI agent (Claude, GPT, local LLMs) can send/receive messages across all 18 channels via standard tool calls.
 
 ```
 Your AI Agent
@@ -143,6 +145,29 @@ Incoming Message → [Middleware 1] → [Middleware 2] → ... → [Fallback Han
 - **Community Management**: Single bot logic serving Discord, Telegram, and Matrix communities
 - **IoT/Home Automation**: Control smart home via iMessage, Telegram, or any channel
 
+## MCP Server (for AI Agents)
+
+Any MCP-compatible agent can control messaging channels as tools:
+
+```json
+{
+  "mcpServers": {
+    "unified-channel": {
+      "command": "npx",
+      "args": ["@unified-channel/mcp-server"],
+      "env": {
+        "UC_TELEGRAM_TOKEN": "your-bot-token",
+        "UC_DISCORD_TOKEN": "your-bot-token"
+      }
+    }
+  }
+}
+```
+
+Available tools: `send_message`, `broadcast_message`, `get_channel_status`, `list_channels`, `get_recent_messages`
+
+See [mcp-server/README.md](mcp-server/README.md) for full docs.
+
 ## Project Structure
 
 ```
@@ -150,8 +175,9 @@ unified-channel/
 ├── python/          # Python implementation (pip install)
 ├── typescript/      # TypeScript/Node.js implementation (npm install)
 ├── java/            # Java implementation (Maven)
+├── mcp-server/      # MCP server for AI agents
 ├── .github/
-│   ├── workflows/   # CI for all three languages
+│   ├── workflows/   # CI for all languages
 │   └── PULL_REQUEST_TEMPLATE.md
 └── CONTRIBUTING.md
 ```
