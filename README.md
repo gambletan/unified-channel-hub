@@ -104,8 +104,11 @@ That's it. Your bot is live, responding to `/status` and `/deploy staging`.
 - [Middleware](#middleware)
   - [Access Control](#access-control)
   - [Command Routing](#command-routing)
+  - [Conversation Memory](#conversation-memory)
+  - [Streaming and Typing Indicators](#streaming-and-typing-indicators)
   - [Custom Middleware](#custom-middleware)
   - [Middleware Chain Order](#middleware-chain-order)
+- [Rich Replies](#rich-replies)
 - [Sending Messages](#sending-messages)
 - [Multi-Channel Setup](#multi-channel-setup)
 - [Message Types](#message-types)
@@ -640,6 +643,119 @@ manager.add_middleware(cmds)                       # 4th: route commands
 
 Each middleware calls `next_handler(msg)` to pass to the next one, or returns a string/`None` to short-circuit.
 
+### Conversation Memory
+
+Automatically maintain per-chat conversation history and inject it into every message. Perfect for LLM-backed agents that need context:
+
+```python
+from unified_channel import ConversationMemory, InMemoryStore, SQLiteStore
+
+# In-memory (default) — fast, lost on restart
+manager.add_middleware(ConversationMemory(max_turns=50))
+
+# SQLite — persistent across restarts
+manager.add_middleware(ConversationMemory(
+    store=SQLiteStore("memory.db"),
+    max_turns=100,
+))
+
+# Access history in your handler
+@manager.on_message
+async def chat(msg):
+    history = msg.metadata["history"]  # list of {"role", "content", "timestamp", ...}
+    # Pass history to your LLM
+    response = await llm.chat(messages=history + [{"role": "user", "content": msg.content.text}])
+    return response
+```
+
+**Storage backends:**
+
+| Backend | Persistence | Use case |
+|---------|-------------|----------|
+| `InMemoryStore()` | No | Development, testing, stateless bots |
+| `SQLiteStore(path)` | Yes | Single-server production deployments |
+| `RedisStore(url)` | Yes | Multi-server / distributed deployments |
+
+Implement `MemoryStore` to add your own backend (DynamoDB, Postgres, etc.).
+
+### Streaming and Typing Indicators
+
+Show typing indicators while your handler processes, and stream LLM responses chunk-by-chunk:
+
+```python
+from unified_channel import StreamingMiddleware, StreamingReply
+
+# Add to pipeline — typing indicators sent automatically
+manager.add_middleware(StreamingMiddleware(
+    typing_interval=3.0,  # seconds between typing pings
+    chunk_delay=0.5,      # delay between streamed chunks
+))
+
+# Regular handlers get typing indicators for free
+@cmds.command("slow")
+async def slow_command(msg):
+    result = await expensive_computation()
+    return result  # typing indicator shown while computing
+
+# Return StreamingReply for progressive delivery
+@manager.on_message
+async def chat(msg):
+    stream = llm.stream_chat(msg.content.text)
+    return StreamingReply.from_llm(stream)
+```
+
+---
+
+## Rich Replies
+
+Build platform-agnostic rich messages with a fluent API. Tables, buttons, images, and code blocks auto-degrade to plain text on unsupported channels:
+
+```python
+from unified_channel import RichReply, Button
+
+reply = (
+    RichReply("Server Status")
+    .add_table(
+        headers=["Service", "Status", "Uptime"],
+        rows=[
+            ["API", "OK", "99.9%"],
+            ["DB", "OK", "99.7%"],
+            ["Cache", "WARN", "98.2%"],
+        ],
+    )
+    .add_divider()
+    .add_code("$ systemctl status api\n  Active: running", language="bash")
+    .add_buttons([[
+        Button(label="Restart API", callback_data="restart_api"),
+        Button(label="View Logs", url="https://logs.example.com"),
+    ]])
+)
+
+# Auto-select best format per channel
+outbound = reply.to_outbound("telegram")  # Markdown + inline_keyboard
+outbound = reply.to_outbound("discord")   # Embeds + components
+outbound = reply.to_outbound("slack")     # Blocks
+outbound = reply.to_outbound("irc")       # Plain text fallback
+
+# Or render directly
+reply.to_plain_text()   # ASCII table, plain buttons
+reply.to_telegram()     # {"text": "...", "parse_mode": "Markdown", "reply_markup": {...}}
+reply.to_discord()      # {"embeds": [...], "components": [...]}
+reply.to_slack()        # {"blocks": [...]}
+```
+
+Use inside any handler:
+
+```python
+@cmds.command("status")
+async def status(msg):
+    reply = RichReply("All systems operational").add_table(
+        ["Metric", "Value"],
+        [["Latency", "12ms"], ["Queue", "0"]],
+    )
+    return reply.to_outbound(msg.channel)
+```
+
 ---
 
 ## Sending Messages
@@ -1028,6 +1144,43 @@ if __name__ == "__main__":
 |-----------|-------------|
 | `allowed_user_ids` | `set[str]` of allowed sender IDs. `None` = allow all |
 
+### ConversationMemory
+
+| Parameter | Description |
+|-----------|-------------|
+| `store` | `MemoryStore` backend (`InMemoryStore`, `SQLiteStore`, `RedisStore`). Default: `InMemoryStore()` |
+| `max_turns` | Max history entries to keep per chat. Default: `50` |
+
+### RichReply
+
+| Method | Description |
+|--------|-------------|
+| `add_text(text)` | Append a text section |
+| `add_table(headers, rows)` | Append an ASCII/rich table |
+| `add_buttons(buttons)` | Append a button grid (`list[list[Button]]`) |
+| `add_image(url, alt)` | Append an image |
+| `add_code(code, language)` | Append a code block |
+| `add_divider()` | Append a visual divider |
+| `to_plain_text()` | Render as plain text (universal fallback) |
+| `to_telegram()` | Render as Telegram Markdown + inline_keyboard |
+| `to_discord()` | Render as Discord embeds + components |
+| `to_slack()` | Render as Slack blocks |
+| `to_outbound(channel)` | Auto-select best format for the channel |
+
+### StreamingMiddleware
+
+| Parameter | Description |
+|-----------|-------------|
+| `typing_interval` | Seconds between typing indicator pings. Default: `3.0` |
+| `chunk_delay` | Seconds between streamed chunks. Default: `0.5` |
+
+### StreamingReply
+
+| Method | Description |
+|--------|-------------|
+| `StreamingReply(chunks)` | Wrap an `AsyncIterator[str]` |
+| `StreamingReply.from_llm(stream)` | Wrap an LLM streaming response |
+
 ### ServiceBridge
 
 | Method | Description |
@@ -1071,7 +1224,7 @@ if __name__ == "__main__":
 
 ## Testing
 
-96 tests covering every layer of the stack. Run with:
+127 tests covering every layer of the stack. Run with:
 
 ```bash
 pip install -e ".[dev]"
@@ -1090,6 +1243,9 @@ pytest -v
 | `test_adapters_unit.py` | 32 | Per-adapter unit tests with mocked SDKs: **IRC** (PRIVMSG parsing, commands, self-ignore, DM routing), **iMessage** (macOS-only), **WhatsApp** (text/command/image/reaction/reply-context), **Mattermost** (text/command/self-ignore/threads), **Twitch** (text/commands/self-ignore/IRC tags), **Zalo** (text/commands), **BlueBubbles/Synology/Nextcloud** (channel_id, status). Lazy import verification for all 18 adapter names. |
 | `test_bridge.py` | 12 | `ServiceBridge` — expose commands, sync/async handlers, args/flag parsing, `/help` generation, `/status` + `/logs` shortcuts, error handling, handler signature detection. |
 | `test_config.py` | 8 | YAML config loading — env var interpolation (basic, embedded, missing, non-string), nested dict interpolation, full config parse with mocked adapter, empty file error, missing PyYAML error. |
+| `test_memory.py` | 12 | `InMemoryStore` CRUD (empty, append, trim, clear, isolation). `ConversationMemory` middleware (history injection, user+reply saving, no-reply, max_turns trimming, separate chats). `SQLiteStore` (CRUD, persistence across reopens). |
+| `test_rich.py` | 12 | Fluent API chaining, plain text rendering (basic, table, buttons, code), Telegram output (Markdown + inline_keyboard), Discord embeds, Slack blocks, `to_outbound` channel selection (telegram, discord, unknown), empty reply. |
+| `test_streaming.py` | 7 | `StreamingReply` chunk collection and `from_llm`. `StreamingMiddleware` typing task lifecycle (creation, cancellation, exception safety), streaming reply assembly, no-adapter fallback, adapter typing during chunks. |
 
 ### What's tested per adapter
 
