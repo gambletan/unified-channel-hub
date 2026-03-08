@@ -10,13 +10,20 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "tsx src/index.ts --help || true"
   },
   "keywords": ["mcp", "ai-agent", "messaging", "telegram", "discord", "slack", "unified-channel"],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0",
-    "unified-channel": "^0.1.0"
+    "zod": "^3.23"
+  },
+  "optionalDependencies": {
+    "grammy": ">=1.20",
+    "discord.js": ">=14.0",
+    "@slack/bolt": ">=3.18",
+    "ws": ">=8.0"
   },
   "devDependencies": {
     "typescript": "^5.5",
