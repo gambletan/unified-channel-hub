@@ -1,5 +1,11 @@
 # unified-channel
 
+### The missing messaging layer for AI Agents
+
+Give your AI agent a voice on **every platform** — Telegram, Discord, Slack, WhatsApp, and 15 more — with a single unified API. No per-platform glue code. No message format translation. Just plug in your agent and go.
+
+Built for the agent era: connect your LLM, autonomous agent, or copilot to real users on the channels they already use. Ship once, deploy everywhere.
+
 **Unified message middleware for Python.** One API to receive and send messages across **19 channels** — Telegram, Discord, Slack, WhatsApp, iMessage, LINE, Matrix, MS Teams, Feishu, Mattermost, Google Chat, Twitch, IRC, Nostr, Zalo, BlueBubbles, Nextcloud Talk, and Synology Chat.
 
 Middleware pipeline, access control, and command routing — all built in. Adding a new channel = **1 file**, implementing 5 methods.
@@ -7,6 +13,50 @@ Middleware pipeline, access control, and command routing — all built in. Addin
 ```
 pip install unified-channel[telegram]
 ```
+
+## Architecture
+
+```
+                         +-----------------------+
+                         |    Your AI Agent /    |
+                         |    Application        |
+                         +-----------+-----------+
+                                     |
+                                     v
+                         +-----------+-----------+
+                         |   ChannelManager      |
+                         |   (orchestrator)      |
+                         +-----------+-----------+
+                                     |
+                     +---------------+---------------+
+                     |               |               |
+                     v               v               v
+              +------+------+ +-----+-----+ +-------+------+
+              | Middleware   | | Middleware | | Middleware    |
+              | (Auth)      | | (Commands) | | (Rate Limit) |
+              +------+------+ +-----+-----+ +-------+------+
+                     |               |               |
+                     +-------+-------+-------+-------+
+                             |               |
+          +------------------+------------------+------------------+
+          |          |           |          |           |          |
+          v          v           v          v           v          v
+     +--------+ +--------+ +-------+ +--------+ +--------+ +-----+
+     |Telegram| |Discord | | Slack | |WhatsApp| | Matrix | | ... |
+     +--------+ +--------+ +-------+ +--------+ +--------+ +-----+
+```
+
+Messages flow in from any adapter, pass through the middleware pipeline, and replies route back through the same adapter. Your agent code never touches platform-specific APIs.
+
+## Also Available In
+
+| Language | Repository | Status |
+|----------|-----------|--------|
+| **Python** | [gambletan/unified-channel](https://github.com/gambletan/unified-channel) | Active |
+| TypeScript | *Coming soon* | Planned |
+| Java | *Coming soon* | Planned |
+
+---
 
 ## Quick Start
 
