@@ -8,3 +8,4 @@ build/
 .pytest_cache/
 *.egg
 .eggs/
+mcp-server/node_modules/
