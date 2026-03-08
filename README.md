@@ -1,12 +1,31 @@
 # unified-channel
 
-> **The missing messaging layer for AI Agents.** 18 channels, 1 unified API. Python, TypeScript, Java, and MCP Server.
+**The only lightweight, embeddable messaging library with 18 channels, ServiceBridge, conversation memory, rich output, and streaming — in Python, TypeScript, and Java.**
 
-Turn any service into something you can manage from your phone. Deploy, restart, check logs, view metrics — all from a Telegram chat (or Discord, Slack, WhatsApp, and 14 more channels). No custom bot framework needed. Just expose your functions and go.
+Not a chatbot platform. Not an AI agent framework. A library you `pip install` / `npm install` / Maven-add into **your** project and call `manager.run()`.
 
-**Also great for**: AI agent messaging, customer support bots, DevOps alerts, and anything else that needs a multi-platform messaging layer.
+## Why This Exists
 
-**New: MCP Server** — AI agents (Claude, GPT, local LLMs) can also control your services and send messages via standard MCP tool calls.
+| Project | What it is | The gap |
+|---------|-----------|---------|
+| **OpenClaw / Nanobot** | Full AI agent frameworks | Too heavy if you just need messaging. You get an entire runtime, config system, and opinionated agent loop. |
+| **Botpress / Hexabot** | Chatbot platforms | Not embeddable. You build inside *their* platform, not yours. |
+| **LangBot** | AI-to-IM bridge | No ServiceBridge (remote function control), no conversation memory, no rich output, no streaming. |
+| **unified-channel** | **Lightweight library you embed in YOUR project** | That's the point — there is no gap. |
+
+unified-channel gives you the messaging plumbing so you can focus on your actual logic: service management, AI agents, alerting, customer support, community bots — whatever.
+
+## Feature Highlights
+
+| Feature | What it does |
+|---------|-------------|
+| **18 Channels** | Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, Teams, LINE, Feishu, Mattermost, Google Chat, Nextcloud, Synology, Zalo, Nostr, BlueBubbles, Twitch, IRC |
+| **ServiceBridge** | Expose any function as a chat command. Your phone becomes a remote control for your services. |
+| **ConversationMemory** | Per-user/per-channel conversation history. In-memory, SQLite, or Redis backends. |
+| **RichReply** | Send buttons, carousels, images, files — auto-degrades gracefully on platforms that don't support them. |
+| **Streaming** | Typing indicators + chunked message delivery for long-running responses. |
+| **MCP Server** | AI agents (Claude, GPT, local LLMs) control your services via standard MCP tool calls. |
+| **3 Languages** | Python, TypeScript, Java — same architecture, same API shape. |
 
 ## Core Value: A Remote Control Panel in Your Pocket
 
@@ -60,13 +79,63 @@ And because it supports MCP, AI agents can control your services too — same ex
 └──────────────────────────────────────────────┘
 ```
 
-## Why unified-channel?
+## Conversation Memory
 
-- **Built for AI agents**: Your agent logic stays clean. Channel adapters handle the messy platform details.
-- **Middleware pipeline**: Access control, command routing, logging — plug in what you need, skip what you don't.
-- **18 channels**: From enterprise (Slack, Teams, Feishu) to consumer (Telegram, WhatsApp, iMessage) to niche (Nostr, IRC, Synology).
-- **Zero required dependencies**: Only install the SDKs for channels you actually use.
-- **3 languages**: Python, TypeScript, and Java — same architecture, same API shape.
+Track per-user, per-channel conversation history with pluggable backends:
+
+```python
+from unified_channel import ChannelManager, ConversationMemory
+from unified_channel.memory import SQLiteBackend
+
+manager = ChannelManager()
+memory = ConversationMemory(backend=SQLiteBackend("conversations.db"))
+manager.add_middleware(memory)
+
+@manager.on_message
+async def handle(msg):
+    history = await memory.get_history(msg.sender_id, limit=10)
+    # Pass history to your LLM, search engine, or custom logic
+    return generate_response(msg.content.text, history)
+```
+
+Backends: `InMemoryBackend` (default), `SQLiteBackend`, `RedisBackend`. Each stores messages with sender, channel, timestamp, and metadata.
+
+## Rich Reply
+
+Send structured content that auto-degrades across platforms:
+
+```python
+from unified_channel import RichReply
+
+reply = (
+    RichReply("Here are your options:")
+    .add_buttons(["Approve", "Reject", "Defer"])
+    .add_image("https://example.com/chart.png", alt="CPU usage graph")
+    .set_footer("Reply within 24h")
+)
+return reply
+```
+
+On Telegram: inline keyboard buttons + image. On Slack: Block Kit. On IRC: plain text with numbered options. Each adapter maps rich elements to the best available platform primitive — no manual per-platform logic.
+
+## Streaming
+
+Long-running responses get typing indicators and chunked delivery instead of awkward silence:
+
+```python
+from unified_channel import StreamingReply
+
+async def handle(msg):
+    stream = StreamingReply(msg)
+    await stream.start_typing()
+
+    async for chunk in call_llm_streaming(msg.content.text):
+        await stream.send_chunk(chunk)
+
+    await stream.finish()
+```
+
+On platforms that support edit-in-place (Telegram, Discord, Slack): the message updates live. On others: chunks are batched and sent at reasonable intervals. Typing indicators are sent automatically during gaps.
 
 ## Quick Start
 
@@ -151,28 +220,42 @@ Incoming Message → [Middleware 1] → [Middleware 2] → ... → [Fallback Han
 - **Middleware**: Intercepts messages before your handler. Chain them for access control, command routing, logging, rate limiting.
 - **ChannelManager**: Orchestrates everything. Register adapters, add middleware, set your handler, call `run()`.
 
+## Feature Comparison
+
+| Feature | unified-channel | OpenClaw | Botpress | LangBot |
+|---------|:-:|:-:|:-:|:-:|
+| Embeddable library | **Yes** | No (full agent) | No (platform) | Partial |
+| Channel count | **18** | 18 | 4 | 10 |
+| ServiceBridge (remote control) | **Yes** | No | No | No |
+| Conversation memory | **Yes** | Yes | Yes | No |
+| Rich reply (auto-degrade) | **Yes** | Partial | Yes | No |
+| Streaming output | **Yes** | Yes | No | No |
+| MCP Server | **Yes** | No | No | No |
+| Python + TypeScript + Java | **Yes** | TS only | TS only | Python only |
+| Zero required deps | **Yes** | No | No | No |
+
 ## Supported Channels
 
 | Channel | Protocol | Python | TypeScript | Java |
 |---------|----------|--------|------------|------|
-| Telegram | Bot API (polling) | ✅ | ✅ | ✅ |
-| Discord | Gateway WebSocket | ✅ | ✅ | ✅ |
-| Slack | Socket Mode | ✅ | ✅ | ✅ |
-| WhatsApp | Cloud API / whatsapp-web.js | ✅ | ✅ | stub |
-| iMessage | macOS SQLite + AppleScript | ✅ | ✅ | stub |
-| Matrix | Client-Server API | ✅ | ✅ | stub |
-| MS Teams | Bot Framework | ✅ | ✅ | stub |
-| LINE | Messaging API | ✅ | ✅ | stub |
-| Feishu/Lark | Event Subscription | ✅ | ✅ | stub |
-| Mattermost | WebSocket + REST | ✅ | ✅ | ✅ |
-| Google Chat | Service Account | ✅ | ✅ | stub |
-| Nextcloud Talk | REST polling | ✅ | ✅ | stub |
-| Synology Chat | Webhook | ✅ | ✅ | stub |
-| Zalo | OA API | ✅ | ✅ | stub |
-| Nostr | NIP-04 DM | ✅ | ✅ | stub |
-| BlueBubbles | REST polling | ✅ | ✅ | stub |
-| Twitch | IRC/TMI | ✅ | ✅ | stub |
-| IRC | Raw IRC | ✅ | ✅ | ✅ |
+| Telegram | Bot API (polling) | Yes | Yes | Yes |
+| Discord | Gateway WebSocket | Yes | Yes | Yes |
+| Slack | Socket Mode | Yes | Yes | Yes |
+| WhatsApp | Cloud API / whatsapp-web.js | Yes | Yes | stub |
+| iMessage | macOS SQLite + AppleScript | Yes | Yes | stub |
+| Matrix | Client-Server API | Yes | Yes | stub |
+| MS Teams | Bot Framework | Yes | Yes | stub |
+| LINE | Messaging API | Yes | Yes | stub |
+| Feishu/Lark | Event Subscription | Yes | Yes | stub |
+| Mattermost | WebSocket + REST | Yes | Yes | Yes |
+| Google Chat | Service Account | Yes | Yes | stub |
+| Nextcloud Talk | REST polling | Yes | Yes | stub |
+| Synology Chat | Webhook | Yes | Yes | stub |
+| Zalo | OA API | Yes | Yes | stub |
+| Nostr | NIP-04 DM | Yes | Yes | stub |
+| BlueBubbles | REST polling | Yes | Yes | stub |
+| Twitch | IRC/TMI | Yes | Yes | stub |
+| IRC | Raw IRC | Yes | Yes | Yes |
 
 ## Use Cases
 
@@ -224,7 +307,7 @@ unified-channel/
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. We welcome PRs for:
-- New channel adapters (especially Java stubs → full implementations)
+- New channel adapters (especially Java stubs to full implementations)
 - Middleware additions (rate limiting, logging, i18n)
 - Bug fixes and documentation improvements
 - Language-specific improvements
