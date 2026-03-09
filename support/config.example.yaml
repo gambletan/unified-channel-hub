@@ -1,0 +1,68 @@
+# unified-support configuration
+# Copy to config.yaml and fill in your values
+
+# Messaging channels — add any combination
+channels:
+  telegram:
+    token: "${TELEGRAM_BOT_TOKEN}"
+  # discord:
+  #   token: "${DISCORD_BOT_TOKEN}"
+  # slack:
+  #   bot_token: "${SLACK_BOT_TOKEN}"
+  #   app_token: "${SLACK_APP_TOKEN}"
+  # whatsapp:
+  #   phone_number_id: "${WHATSAPP_PHONE_ID}"
+  #   access_token: "${WHATSAPP_ACCESS_TOKEN}"
+  #   verify_token: "${WHATSAPP_VERIFY_TOKEN}"
+  # wechat:
+  #   corp_id: "${WECHAT_CORP_ID}"
+  #   agent_id: "${WECHAT_AGENT_ID}"
+  #   secret: "${WECHAT_SECRET}"
+  #   token: "${WECHAT_TOKEN}"
+  #   encoding_aes_key: "${WECHAT_AES_KEY}"
+
+# AI backend
+ai:
+  backend: deepseek          # claude | deepseek | qwen | glm | minimax | openai
+  api_key: "${AI_API_KEY}"
+  model: deepseek-chat       # or claude-sonnet-4-20250514, qwen-turbo, gpt-4o-mini
+  # base_url: null           # Override for custom endpoints
+  temperature: 0.3
+  system_prompt: |
+    You are a helpful customer support agent.
+    Answer based on the knowledge base context provided.
+    Be concise, friendly, and professional.
+    Reply in the same language the customer uses.
+    If you cannot answer confidently, offer to connect them with a human agent.
+
+    {kb_context}
+
+# Knowledge base (FAQ/docs the AI searches before answering)
+knowledge:
+  path: ./knowledge
+  reindex_on_start: true
+
+# Escalation settings
+escalation:
+  max_ai_turns: 8            # Escalate after N AI turns without resolution
+
+# Rate limiting
+rate_limit:
+  max_messages: 30
+  window_seconds: 60
+
+# Human agents (receive escalated tickets)
+agents:
+  - id: agent-1
+    name: Support Team
+    channel: telegram         # Agent's IM channel
+    chat_id: "${AGENT_CHAT_ID}"
+    skills: [general]
+
+# Dashboard
+dashboard:
+  port: 8081
+
+# Database
+database:
+  path: ./data/support.db
