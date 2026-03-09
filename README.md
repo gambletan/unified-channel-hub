@@ -1115,6 +1115,150 @@ if __name__ == "__main__":
 
 ---
 
+## AI Agent Integration
+
+Connect Claude (or any LLM) to your Telegram bot — users chat naturally, and the agent can read/edit your project files:
+
+```python
+import asyncio
+import os
+from unified_channel import (
+    ChannelManager, TelegramAdapter,
+    AccessMiddleware, CommandMiddleware, RateLimitMiddleware,
+    ConversationMemory, Scheduler, Dashboard, UnifiedMessage,
+)
+
+manager = ChannelManager()
+manager.add_channel(TelegramAdapter(token=os.environ["TELEGRAM_TOKEN"]))
+
+# Security: admin-only + rate limiting
+manager.add_middleware(AccessMiddleware(allowed_user_ids={os.environ["ADMIN_ID"]}))
+manager.add_middleware(RateLimitMiddleware(max_messages=30, window_seconds=60))
+manager.add_middleware(ConversationMemory(max_turns=50))
+
+cmds = CommandMiddleware()
+manager.add_middleware(cmds)
+
+# Per-chat history for LLM context
+chat_histories: dict[str, list[dict]] = {}
+active_tasks: dict[str, asyncio.subprocess.Process] = {}
+
+ALLOWED_MODELS = {"claude-sonnet-4-20250514", "claude-haiku-4-5-20251001", "claude-opus-4-6"}
+model = "claude-sonnet-4-20250514"
+work_dir = os.environ.get("CLAUDE_WORK_DIR", os.getcwd())
+
+
+async def call_claude_cli(text: str, history: list, chat_id: str) -> str:
+    """Run Claude Code CLI with project context."""
+    import shutil
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        return "Claude CLI not found."
+
+    # Build prompt with conversation history
+    parts = []
+    for entry in history[:-1]:
+        role = "Human" if entry["role"] == "user" else "Assistant"
+        parts.append(f"{role}: {entry['content']}")
+
+    prompt = text
+    if parts:
+        prompt = "Previous conversation:\n" + "\n".join(parts[-10:]) + f"\n\nHuman: {text}"
+
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    proc = await asyncio.create_subprocess_exec(
+        claude_bin, "--print", "--model", model,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=work_dir,  # Claude works in your project directory
+    )
+    active_tasks[chat_id] = proc
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=120)
+    finally:
+        active_tasks.pop(chat_id, None)
+
+    return stdout.decode().strip() if proc.returncode == 0 else "Claude encountered an error."
+
+
+@cmds.command("stop")
+async def stop_cmd(msg: UnifiedMessage) -> str:
+    proc = active_tasks.get(msg.chat_id)
+    if proc and proc.returncode is None:
+        proc.kill()
+        return "Stopped."
+    return "No active task."
+
+
+@cmds.command("model")
+async def model_cmd(msg: UnifiedMessage) -> str:
+    global model
+    if msg.content.args:
+        if msg.content.args[0] not in ALLOWED_MODELS:
+            return f"Allowed: {', '.join(ALLOWED_MODELS)}"
+        model = msg.content.args[0]
+        return f"Model: `{model}`"
+    return f"Current: `{model}`"
+
+
+@cmds.command("clear")
+async def clear_cmd(msg: UnifiedMessage) -> str:
+    chat_histories.pop(msg.chat_id, None)
+    return "History cleared."
+
+
+@manager.on_message
+async def on_message(msg: UnifiedMessage) -> str:
+    text = msg.content.text
+    if not text or not text.strip():
+        return "Send a message to chat with Claude."
+
+    chat_id = msg.chat_id or "default"
+    history = chat_histories.setdefault(chat_id, [])
+    history.append({"role": "user", "content": text})
+
+    if len(history) > 40:
+        chat_histories[chat_id] = history[-40:]
+        history = chat_histories[chat_id]
+
+    # Show thinking indicator
+    try:
+        await manager.send("telegram", chat_id, "💭 Thinking...")
+    except Exception:
+        pass
+
+    reply = await call_claude_cli(text, history, chat_id)
+    history.append({"role": "assistant", "content": reply})
+    return reply
+
+
+# Optional: scheduled reports + web dashboard
+scheduler = Scheduler(manager)
+dashboard = Dashboard(manager, port=8080)
+
+
+async def main():
+    await dashboard.start()
+    scheduler.every(3600, "telegram", os.environ["ADMIN_ID"],
+                    lambda: "Hourly: all systems operational")
+    await manager.run()
+
+asyncio.run(main())
+```
+
+**What this gives you:**
+- Chat with Claude naturally via Telegram — Claude can read your project files
+- `/stop` kills a long-running Claude task
+- `/model claude-opus-4-6` switches models (whitelisted)
+- `/clear` resets conversation history
+- Rate limiting + access control built in
+- `CLAUDE_WORK_DIR` sets which project Claude works in
+- Hourly status reports + web dashboard at `localhost:8080`
+
+---
+
 ## API Reference
 
 ### ChannelManager
