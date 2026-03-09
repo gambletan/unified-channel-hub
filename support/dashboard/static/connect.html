@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>联系客服 | Contact Support</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.card { background: white; border-radius: 20px; padding: 40px 32px; max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center; }
+h1 { font-size: 24px; margin-bottom: 8px; }
+.subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+.channels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+.ch-btn { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border: 2px solid #eee; border-radius: 12px; text-decoration: none; color: #333; font-size: 14px; font-weight: 500; transition: all 0.2s; }
+.ch-btn:hover { border-color: #667eea; background: #f8f8ff; transform: translateY(-2px); }
+.ch-btn .icon { font-size: 24px; }
+.ch-btn.wechat { border-color: #07c160; }
+.ch-btn.telegram { border-color: #0088cc; }
+.ch-btn.whatsapp { border-color: #25d366; }
+.ch-btn.line { border-color: #00b900; }
+.ch-btn.discord { border-color: #5865f2; }
+.ch-btn.slack { border-color: #4a154b; }
+.ch-btn.email { border-color: #ea4335; }
+.ch-btn.web { border-color: #333; grid-column: span 2; justify-content: center; }
+.footer { font-size: 12px; color: #999; margin-top: 16px; }
+.powered { font-size: 11px; color: #ccc; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>👋 需要帮助？</h1>
+  <p class="subtitle">选择您常用的聊天工具，立即联系客服<br>Pick your preferred messaging app</p>
+
+  <div class="channels" id="channels">
+    <!-- Populated by config -->
+  </div>
+
+  <p class="footer">无需下载任何 APP · 直接在您的聊天工具里对话</p>
+  <p class="powered">Powered by <a href="https://github.com/gambletan/unified-support" style="color:#999">unified-support</a></p>
+</div>
+
+<script>
+// This config is injected by the server based on which channels are active
+// In production, this comes from /api/connect-config
+const DEFAULT_CONFIG = {
+  company: "Support",
+  channels: [
+    { name: "微信", icon: "💬", type: "wechat", url: "#wechat-qr", class: "wechat" },
+    { name: "Telegram", icon: "✈️", type: "telegram", url: "https://t.me/YOUR_BOT", class: "telegram" },
+    { name: "WhatsApp", icon: "📱", type: "whatsapp", url: "https://wa.me/YOUR_NUMBER", class: "whatsapp" },
+    { name: "LINE", icon: "🟢", type: "line", url: "https://line.me/R/ti/p/YOUR_ID", class: "line" },
+    { name: "Discord", icon: "🎮", type: "discord", url: "https://discord.gg/YOUR_INVITE", class: "discord" },
+    { name: "Slack", icon: "💼", type: "slack", url: "https://YOUR.slack.com", class: "slack" },
+    { name: "Email", icon: "📧", type: "email", url: "mailto:support@example.com", class: "email" },
+    { name: "网页聊天 / Web Chat", icon: "🌐", type: "web", url: "/chat", class: "web" },
+  ]
+};
+
+async function init() {
+  let config = DEFAULT_CONFIG;
+  try {
+    const res = await fetch('/api/connect-config');
+    if (res.ok) config = await res.json();
+  } catch {}
+
+  if (config.company) document.title = `${config.company} - Contact Support`;
+
+  const el = document.getElementById('channels');
+  el.innerHTML = config.channels
+    .filter(c => c.url && c.url !== '#')
+    .map(c => `
+      <a href="${c.url}" class="ch-btn ${c.class || ''}" target="_blank" rel="noopener">
+        <span class="icon">${c.icon}</span>
+        ${c.name}
+      </a>
+    `).join('');
+}
+
+// Auto-detect platform and highlight recommended channel
+function detectPlatform() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('micromessenger')) return 'wechat';
+  if (ua.includes('telegram')) return 'telegram';
+  if (ua.includes('line')) return 'line';
+  return null;
+}
+
+const platform = detectPlatform();
+if (platform) {
+  // If opened inside an IM app, auto-redirect to that channel's bot
+  // This makes the QR code "smart" — scan from WeChat → goes to WeChat bot
+}
+
+init();
+</script>
+</body>
+</html>

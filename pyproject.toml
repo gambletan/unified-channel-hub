@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "unified-support"
+version = "0.1.0"
+description = "AI-native omnichannel customer support — one QR code, any IM, instant service"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "unified-channel>=0.2.0",
+    "aiosqlite>=0.20",
+    "aiohttp>=3.9",
+    "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+all-channels = ["unified-channel[all]>=0.2.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.urls]
+Homepage = "https://github.com/gambletan/unified-support"
+Repository = "https://github.com/gambletan/unified-support"
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
