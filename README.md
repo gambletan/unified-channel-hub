@@ -1,60 +1,104 @@
+<div align="center">
+
 # unified-channel
 
-### The missing messaging layer for AI Agents
+### 19 Channels. 1 API. Ship Your AI Agent Everywhere.
 
-Give your AI agent a voice on **every platform** — Telegram, Discord, Slack, WhatsApp, and 15 more — with a single unified API. No per-platform glue code. No message format translation. Just plug in your agent and go.
+[![PyPI](https://img.shields.io/pypi/v/unified-channel?color=blue&label=PyPI)](https://pypi.org/project/unified-channel/)
+[![npm](https://img.shields.io/npm/v/unified-channel?color=red&label=npm)](https://www.npmjs.com/package/unified-channel)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
+[![Tests](https://img.shields.io/badge/Tests-284%20passing-brightgreen.svg)]()
 
-Built for the agent era: connect your LLM, autonomous agent, or copilot to real users on the channels they already use. Ship once, deploy everywhere.
+**Stop writing platform-specific bot code.** Write your agent once, deploy to every messaging platform your users are on.
 
-**Unified message middleware for Python.** One API to receive and send messages across **19 channels** — Telegram, Discord, Slack, WhatsApp, iMessage, LINE, Matrix, MS Teams, Feishu, Mattermost, Google Chat, Twitch, IRC, Nostr, Zalo, BlueBubbles, Nextcloud Talk, and Synology Chat.
+[Get Started](#quick-start) | [AI Agent Example](#ai-agent-integration) | [19 Adapters](#channel-adapters) | [API Reference](#api-reference)
 
-Middleware pipeline, access control, and command routing — all built in. Adding a new channel = **1 file**, implementing 5 methods.
+</div>
+
+---
+
+### The problem
+
+You build a Telegram bot. Then your team uses Slack. Clients want WhatsApp. Discord community needs it too. Now you're maintaining 4 codebases doing the same thing with 4 different APIs.
+
+### The solution
 
 ```
-pip install unified-channel[telegram]
+pip install unified-channel[telegram,discord,slack,whatsapp]
 ```
 
-## Architecture
+One `ChannelManager`. One middleware pipeline. One message type. **19 channels.**
 
-```
-                         +-----------------------+
-                         |    Your AI Agent /    |
-                         |    Application        |
-                         +-----------+-----------+
-                                     |
-                                     v
-                         +-----------+-----------+
-                         |   ChannelManager      |
-                         |   (orchestrator)      |
-                         +-----------+-----------+
-                                     |
-                     +---------------+---------------+
-                     |               |               |
-                     v               v               v
-              +------+------+ +-----+-----+ +-------+------+
-              | Middleware   | | Middleware | | Middleware    |
-              | (Auth)      | | (Commands) | | (Rate Limit) |
-              +------+------+ +-----+-----+ +-------+------+
-                     |               |               |
-                     +-------+-------+-------+-------+
-                             |               |
-          +------------------+------------------+------------------+
-          |          |           |          |           |          |
-          v          v           v          v           v          v
-     +--------+ +--------+ +-------+ +--------+ +--------+ +-----+
-     |Telegram| |Discord | | Slack | |WhatsApp| | Matrix | | ... |
-     +--------+ +--------+ +-------+ +--------+ +--------+ +-----+
+```python
+manager = ChannelManager()
+manager.add_channel(TelegramAdapter(token="..."))
+manager.add_channel(DiscordAdapter(token="..."))
+manager.add_channel(SlackAdapter(bot_token="...", app_token="..."))
+
+@manager.on_message
+async def handle(msg):
+    # msg.channel == "telegram" | "discord" | "slack" | ...
+    # Same code handles all of them
+    return await my_agent.chat(msg.content.text)
 ```
 
-Messages flow in from any adapter, pass through the middleware pipeline, and replies route back through the same adapter. Your agent code never touches platform-specific APIs.
+### Why unified-channel
 
-## Also Available In
+| | Without | With unified-channel |
+|---|---|---|
+| **Add a channel** | New SDK, new message format, new auth flow, new deploy | `manager.add_channel(XAdapter(token="..."))` |
+| **Auth/rate-limit** | Implement per-platform | `add_middleware(AccessMiddleware(...))` — works everywhere |
+| **Send from backend** | Different API per channel | `await manager.send("telegram", chat_id, text)` |
+| **New adapter** | Days of work | 1 file, 5 methods |
 
-| Language | Repository | Status |
-|----------|-----------|--------|
-| **Python** | [gambletan/unified-channel](https://github.com/gambletan/unified-channel) | Active |
-| TypeScript | *Coming soon* | Planned |
-| Java | *Coming soon* | Planned |
+### Built-in batteries
+
+| Feature | What it does |
+|---|---|
+| **AccessMiddleware** | Allowlist users across all channels |
+| **CommandMiddleware** | `/command` routing with argument parsing |
+| **RateLimitMiddleware** | Sliding window per-user rate limiting |
+| **ConversationMemory** | Per-chat history (InMemory / SQLite / Redis) |
+| **StreamingMiddleware** | Typing indicators + chunked LLM delivery |
+| **RichReply** | Tables, buttons, code blocks — auto-degrades per platform |
+| **ServiceBridge** | Expose any function as a chat command in 1 line |
+| **Scheduler** | Cron + interval periodic tasks |
+| **Dashboard** | Built-in web UI with message log + API |
+| **I18n** | Locale detection + translation helpers |
+| **VoiceMiddleware** | STT/TTS (OpenAI Whisper + TTS) |
+| **YAML Config** | Load channels from config file, env var interpolation |
+
+### Supported channels
+
+| Channel | Mode | Public URL needed |
+|---|---|---|
+| Telegram | Polling / Webhook | No |
+| Discord | WebSocket | No |
+| Slack | Socket Mode | No |
+| WhatsApp | Webhook | Yes |
+| iMessage | DB polling (macOS) | No |
+| LINE | Webhook | Yes |
+| Matrix | Sync | No |
+| MS Teams | Webhook | Yes |
+| Feishu / Lark | Webhook | Yes |
+| Mattermost | WebSocket | No |
+| Google Chat | Webhook | Yes |
+| Twitch | IRC/WebSocket | No |
+| IRC | TCP socket | No |
+| Nostr | WebSocket (relay) | No |
+| Zalo | Webhook | Yes |
+| BlueBubbles | Polling | No |
+| Nextcloud Talk | Polling | No |
+| Synology Chat | Webhook | Yes |
+
+### Also available in
+
+| Language | Package | Install |
+|---|---|---|
+| **Python** | [unified-channel](https://pypi.org/project/unified-channel/) | `pip install unified-channel` |
+| **TypeScript** | [unified-channel](https://www.npmjs.com/package/unified-channel) | `npm install unified-channel` |
+| **Java** | [unified-channel-java](https://github.com/gambletan/unified-channel-java) | Maven / Gradle |
 
 ---
 
