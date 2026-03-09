@@ -160,9 +160,12 @@ class TelegramAdapter(ChannelAdapter):
 
         try:
             sent = await self._app.bot.send_message(**kwargs)
-        except Exception:
+        except Exception as e:
             # Markdown/HTML parse failure — retry as plain text
-            if kwargs.get("parse_mode"):
+            if kwargs.get("parse_mode") and (
+                "parse entities" in str(e).lower()
+                or "can't parse" in str(e).lower()
+            ):
                 logger.debug("send failed with parse_mode=%s, retrying as plain text", kwargs["parse_mode"])
                 kwargs.pop("parse_mode")
                 sent = await self._app.bot.send_message(**kwargs)
