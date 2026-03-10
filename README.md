@@ -1,3 +1,10 @@
+[![CI](https://github.com/gambletan/unified-channel-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/gambletan/unified-channel-hub/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/unified-channel)](https://pypi.org/project/unified-channel/)
+[![npm](https://img.shields.io/npm/v/unified-channel)](https://www.npmjs.com/package/unified-channel)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Node 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
+
 # unified-channel
 
 **The only lightweight, embeddable messaging library with 18 channels, ServiceBridge, conversation memory, rich output, and streaming — in Python, TypeScript, and Java.**

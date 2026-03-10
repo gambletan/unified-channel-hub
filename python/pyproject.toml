@@ -67,5 +67,12 @@ all = [
 ]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
