@@ -11,6 +11,7 @@ from .streaming import StreamingMiddleware, StreamingReply
 from .i18n import I18nMiddleware
 from .scheduler import Scheduler, parse_cron, cron_matches
 from .queue import InMemoryQueue, QueueMiddleware, QueueProcessor
+from .relay import RelayMiddleware, RelayRule
 
 _LAZY_EXTRAS = {
     "Dashboard": ".dashboard",
