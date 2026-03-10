@@ -11,15 +11,11 @@ import logging
 from datetime import datetime
 from typing import AsyncIterator, Literal
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from telegram import Update
+    from telegram.ext import Application, ContextTypes
 
 from ..adapter import ChannelAdapter
 from ..types import (
@@ -78,6 +74,14 @@ class TelegramAdapter(ChannelAdapter):
         return self._mode
 
     async def connect(self) -> None:
+        from telegram.ext import (
+            Application,
+            CallbackQueryHandler,
+            CommandHandler,
+            MessageHandler,
+            filters,
+        )
+
         self._app = (
             Application.builder()
             .token(self._token)
