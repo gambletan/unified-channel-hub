@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS topic_mappings (
     customer_chat_id TEXT PRIMARY KEY,
     thread_id INTEGER NOT NULL,
     user_lang TEXT DEFAULT NULL,
-    closed INTEGER DEFAULT 0
+    closed INTEGER DEFAULT 0,
+    channel TEXT DEFAULT 'telegram'
 );
 CREATE INDEX IF NOT EXISTS idx_topic_thread ON topic_mappings(thread_id);
 """
@@ -152,6 +153,7 @@ class Database:
         """Add columns that may not exist in older databases."""
         migrations = [
             ("topic_mappings", "closed", "ALTER TABLE topic_mappings ADD COLUMN closed INTEGER DEFAULT 0"),
+            ("topic_mappings", "channel", "ALTER TABLE topic_mappings ADD COLUMN channel TEXT DEFAULT 'telegram'"),
         ]
         for table, column, sql in migrations:
             try:

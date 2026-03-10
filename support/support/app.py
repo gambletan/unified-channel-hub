@@ -116,28 +116,28 @@ async def run(config_path: str = "config.yaml") -> None:
         window_seconds=config.get("rate_limit", {}).get("window_seconds", 60),
     ))
 
+    # Optional ERP client for user info lookups (used by topic bridge + AI handler)
+    erp_client = None
+    erp_config = config.get("erp", {})
+    if erp_config.get("base_url"):
+        try:
+            ac_cs_path = Path(__file__).resolve().parents[3] / "X-Auto" / "AC-Customer-Support"
+            sys.path.insert(0, str(ac_cs_path))
+            import erp_client as erp_mod
+            erp_client = erp_mod.ERPClient(
+                base_url=erp_config["base_url"],
+                api_key=erp_config.get("api_key", ""),
+            )
+            logger.info("ERP client initialized: %s", erp_config["base_url"])
+        except Exception as e:
+            logger.warning("ERP client init failed (non-fatal): %s", e)
+
     # Topic bridge: DMs ↔ agent group forum topics
     tb_config = config.get("topic_bridge", {})
     if tb_config.get("group_chat_id"):
         from unified_channel.adapters.telegram import TelegramAdapter
         tg_adapter = manager._channels.get("telegram")
         if isinstance(tg_adapter, TelegramAdapter):
-            # Optional ERP client for user info lookups
-            erp_client = None
-            erp_config = config.get("erp", {})
-            if erp_config.get("base_url"):
-                try:
-                    ac_cs_path = Path(__file__).resolve().parents[3] / "X-Auto" / "AC-Customer-Support"
-                    sys.path.insert(0, str(ac_cs_path))
-                    import erp_client as erp_mod
-                    erp_client = erp_mod.ERPClient(
-                        base_url=erp_config["base_url"],
-                        api_key=erp_config.get("api_key", ""),
-                    )
-                    logger.info("ERP client initialized: %s", erp_config["base_url"])
-                except Exception as e:
-                    logger.warning("ERP client init failed (non-fatal): %s", e)
-
             manager.add_middleware(TopicBridgeMiddleware(
                 db=db,
                 tg_adapter=tg_adapter,
@@ -148,6 +148,7 @@ async def run(config_path: str = "config.yaml") -> None:
                 reply_timeout=tb_config.get("reply_timeout", 180),
                 sensitive_words=tb_config.get("sensitive_words"),
                 erp_client=erp_client,
+                send_fn=manager.send,
             ))
             logger.info("Topic bridge enabled for group %s", tb_config["group_chat_id"])
 
@@ -165,7 +166,23 @@ async def run(config_path: str = "config.yaml") -> None:
             {"role": h.get("role", "user"), "content": h.get("content", "")}
             for h in history[-10:]  # Last 10 turns for context
         ]
-        return await ai_router.generate_reply(msg.content.text or "", formatted)
+        # Inject ERP user/order info for authenticated users
+        user_context = None
+        platform_uid = (msg.metadata or {}).get("platform_user_id")
+        if platform_uid and erp_client:
+            try:
+                parts = []
+                info = await erp_client.get_user_info(platform_uid)
+                if info:
+                    parts.append(info.summary_for_agent())
+                orders = await erp_client.get_orders(user_id=platform_uid, page_size=5)
+                if orders and orders.orders:
+                    parts.append(orders.summary_for_agent())
+                if parts:
+                    user_context = "\n\n".join(parts)
+            except Exception as e:
+                logger.warning("ERP context fetch failed: %s", e)
+        return await ai_router.generate_reply(msg.content.text or "", formatted, user_context=user_context)
 
     # Dashboard
     dashboard_config = config.get("dashboard", {})
@@ -195,6 +212,13 @@ def _setup_channels(manager: ChannelManager, channels_config: dict) -> None:
             if name == "telegram":
                 from unified_channel import TelegramAdapter
                 manager.add_channel(TelegramAdapter(token=cfg["token"]))
+            elif name == "webchat":
+                from unified_channel.adapters.webchat import WebChatAdapter
+                manager.add_channel(WebChatAdapter(
+                    port=cfg.get("port", 8082),
+                    path=cfg.get("path", "/ws"),
+                    cors_origins=cfg.get("cors_origins"),
+                ))
             elif name == "discord":
                 from unified_channel import DiscordAdapter
                 manager.add_channel(DiscordAdapter(token=cfg["token"]))

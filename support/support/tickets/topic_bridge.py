@@ -65,6 +65,7 @@ class TopicBridgeMiddleware(Middleware):
         reply_timeout: int = 180,
         sensitive_words: list[str] | None = None,
         erp_client: Any | None = None,
+        send_fn: Any | None = None,
     ):
         self.db = db
         self.tg = tg_adapter
@@ -75,16 +76,31 @@ class TopicBridgeMiddleware(Middleware):
         self.reply_timeout = reply_timeout
         self.sensitive_words = sensitive_words or _DEFAULT_SENSITIVE
         self.erp = erp_client  # Optional ERPClient for user info lookups
+        self._send_fn = send_fn  # ChannelManager.send() for multi-channel reply
 
         # Caches
         self._topic_cache: dict[str, int] = {}      # customer_chat_id → thread_id
         self._reverse_cache: dict[int, str] = {}     # thread_id → customer_chat_id
+        self._customer_channel: dict[str, str] = {}  # customer_chat_id → channel name
         self._user_lang: dict[str, str] = {}         # customer_chat_id → lang code
         self._pending_timers: dict[str, asyncio.Task] = {}  # session → timeout task
 
     @property
     def bot(self):
         return self.tg._app.bot
+
+    async def _send_to_customer(self, customer_chat_id: str, text: str, **kwargs) -> None:
+        """Send message to customer via their original channel."""
+        channel = self._customer_channel.get(customer_chat_id, "telegram")
+        if channel == "telegram":
+            try:
+                await self.bot.send_message(chat_id=int(customer_chat_id), text=text, **kwargs)
+            except (ValueError, TypeError):
+                logger.error("Invalid telegram chat_id (non-numeric): %s", customer_chat_id)
+        elif self._send_fn:
+            await self._send_fn(channel, customer_chat_id, text)
+        else:
+            logger.warning("No send_fn for channel %s, cannot send to %s", channel, customer_chat_id)
 
     async def process(self, msg: UnifiedMessage, next_handler: Handler) -> Any:
         chat_id = msg.chat_id or ""
@@ -100,12 +116,87 @@ class TopicBridgeMiddleware(Middleware):
         if not text.strip():
             return await next_handler(msg)
 
+        # --- Auth upgrade (guest → registered user) ---
+        if (msg.metadata or {}).get("auth_upgrade") and chat_id:
+            return await self._handle_auth_upgrade(msg, chat_id, next_handler)
+
         # --- Message from agent group ---
         if str(chat_id) == str(self.group_chat_id):
             return await self._handle_group_message(msg, sender_id, text)
 
         # --- Customer DM ---
         return await self._handle_customer_dm(msg, next_handler, text)
+
+    # =========================================================================
+    # Auth Upgrade (guest → registered)
+    # =========================================================================
+
+    async def _handle_auth_upgrade(self, msg: UnifiedMessage, chat_id: str, next_handler: Handler) -> Any:
+        """Guest user just logged in — migrate topic mapping and show ERP info.
+
+        Migrates topic from old session key (anon_xxx) to stable user key (u_{userId}),
+        so the same topic is found on future visits regardless of session.
+        """
+        user_id = msg.sender.id if msg.sender else ""
+        user_name = (msg.sender.display_name or msg.sender.username or user_id) if msg.sender else user_id
+        stable_key = f"u_{user_id}" if user_id else chat_id
+        old_session = (msg.metadata or {}).get("previous_session_id", chat_id)
+
+        # Find topic by old guest session_id
+        thread_id = self._topic_cache.get(old_session) or self._topic_cache.get(chat_id)
+        if not thread_id:
+            # No existing topic, let it flow through as normal customer DM
+            return await next_handler(msg)
+
+        # Migrate topic mapping: old session → stable user key
+        if stable_key != old_session:
+            # Update DB: add new mapping with stable key, remove old session key
+            await self._save_topic_mapping(stable_key, thread_id, msg.channel or "webchat")
+            try:
+                await self.db._db.execute(
+                    "DELETE FROM topic_mappings WHERE customer_chat_id = ?", (old_session,),
+                )
+                await self.db._db.commit()
+            except Exception:
+                pass
+            # Update caches — keep old session as alias so ongoing WS messages still route correctly
+            self._topic_cache[stable_key] = thread_id
+            self._topic_cache[old_session] = thread_id  # alias: old session → same thread
+            if chat_id != old_session:
+                self._topic_cache[chat_id] = thread_id
+            self._reverse_cache[thread_id] = stable_key
+            channel = self._customer_channel.get(old_session, msg.channel or "webchat")
+            self._customer_channel[stable_key] = channel
+            self._customer_channel[old_session] = channel
+            logger.info("Migrated topic mapping: %s → %s (thread=%s)", old_session, stable_key, thread_id)
+
+        # Update topic title with real name
+        try:
+            await self.bot.edit_forum_topic(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                name=f"👤 {user_name}",
+            )
+        except Exception as e:
+            logger.warning("Failed to update topic title: %s", e)
+
+        # Fetch and display ERP user info
+        erp_info = await self._fetch_erp_user_info(user_id)
+        notify = f"🔗 用户已登录: {user_name} (ID: {user_id})"
+        if erp_info:
+            notify += f"\n\n{erp_info}"
+
+        try:
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                text=notify,
+            )
+        except Exception as e:
+            logger.warning("Failed to send auth upgrade notice: %s", e)
+
+        # Pass through to IdentityMiddleware for binding storage
+        return await next_handler(msg)
 
     # =========================================================================
     # Rating Callback
@@ -166,12 +257,16 @@ class TopicBridgeMiddleware(Middleware):
         self, msg: UnifiedMessage, next_handler: Handler, text: str
     ) -> Any:
         chat_id = msg.chat_id or ""
+        channel = msg.channel or "telegram"
         customer_name = (
             msg.sender.display_name or msg.sender.username or chat_id
             if msg.sender else chat_id
         )
 
-        topic_id = await self._get_or_create_topic(chat_id, customer_name)
+        # Remember which channel this customer came from
+        self._customer_channel[chat_id] = channel
+
+        topic_id = await self._get_or_create_topic(chat_id, customer_name, channel)
 
         # Mark for downstream middleware to skip agent detection
         if not hasattr(msg, "metadata") or msg.metadata is None:
@@ -242,17 +337,35 @@ class TopicBridgeMiddleware(Middleware):
         # Run AI pipeline
         result = await next_handler(msg)
 
-        # Forward AI reply to topic
+        # Forward AI reply to topic (with translation only if AI replied in non-default language)
         if result and isinstance(result, str):
             self._cancel_timer(chat_id)
+            display = f"🤖 {result}"
+            user_lang = self._user_lang.get(chat_id, self.default_lang)
+            if user_lang != self.default_lang and self.router.get_backend("translate"):
+                # Detect the language of the AI reply — only translate if it's NOT already in default_lang
+                reply_lang = await self._detect_language(result)
+                if reply_lang != self.default_lang:
+                    translated = await self._translate(result, self.default_lang, reply_lang)
+                    if translated and translated != result:
+                        display = f"🤖 {result}\n\n📝 _{translated}_"
             try:
                 await self.bot.send_message(
                     chat_id=self.group_chat_id,
                     message_thread_id=topic_id,
-                    text=f"🤖 {result}",
+                    text=display,
+                    parse_mode="Markdown",
                 )
-            except Exception as e:
-                logger.error("Failed to forward AI reply to topic: %s", e)
+            except Exception:
+                # Retry without markdown
+                try:
+                    await self.bot.send_message(
+                        chat_id=self.group_chat_id,
+                        message_thread_id=topic_id,
+                        text=f"🤖 {result}",
+                    )
+                except Exception as e:
+                    logger.error("Failed to forward AI reply to topic: %s", e)
 
         return result
 
@@ -304,18 +417,19 @@ class TopicBridgeMiddleware(Middleware):
                 except Exception:
                     pass
 
-        # Forward to customer
+        # Forward to customer (via their original channel)
+        customer_channel = self._customer_channel.get(customer_chat_id, "telegram")
         try:
-            await self.bot.send_message(chat_id=int(customer_chat_id), text=send_text)
+            await self._send_to_customer(customer_chat_id, send_text)
             # Store agent message via DB layer
-            ticket = await self.db.find_ticket_by_chat("telegram", customer_chat_id)
+            ticket = await self.db.find_ticket_by_chat(customer_channel, customer_chat_id)
             if ticket:
                 await self.db.add_message(TicketMessage(
                     ticket_id=ticket.id,
                     role="agent",
                     sender_id=sender_id,
                     content=text,
-                    channel="telegram",
+                    channel=customer_channel,
                 ))
 
             await self.bot.send_message(
@@ -353,36 +467,45 @@ class TopicBridgeMiddleware(Middleware):
 
         if cmd == "close":
             # Close ticket
+            customer_channel = self._customer_channel.get(customer_chat_id, "telegram") if customer_chat_id else "telegram"
             if customer_chat_id:
-                ticket = await self.db.find_ticket_by_chat("telegram", customer_chat_id)
+                ticket = await self.db.find_ticket_by_chat(customer_channel, customer_chat_id)
                 if ticket and ticket.status != TicketStatus.CLOSED:
                     await self.db.update_ticket_status(ticket.id, TicketStatus.CLOSED)
                     if ticket.assigned_agent_id:
                         await self.db.update_agent_load(ticket.assigned_agent_id, -1)
                     await self.db.log_event("closed", ticket_id=ticket.id)
                 self._cancel_timer(customer_chat_id)
-                # Notify customer with rating buttons
+                # Notify customer with rating
                 try:
-                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                    keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("⭐1", callback_data=f"rate:{ticket.id}:1"),
-                            InlineKeyboardButton("⭐2", callback_data=f"rate:{ticket.id}:2"),
-                            InlineKeyboardButton("⭐3", callback_data=f"rate:{ticket.id}:3"),
-                            InlineKeyboardButton("⭐4", callback_data=f"rate:{ticket.id}:4"),
-                            InlineKeyboardButton("⭐5", callback_data=f"rate:{ticket.id}:5"),
-                        ]
-                    ])
-                    await self.bot.send_message(
-                        chat_id=int(customer_chat_id),
-                        text="您的会话已结束。请为本次服务评分：",
-                        reply_markup=keyboard,
-                    )
-                except Exception:
-                    try:
+                    if customer_channel == "telegram" and ticket:
+                        # Telegram supports inline keyboard buttons
+                        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                        keyboard = InlineKeyboardMarkup([
+                            [
+                                InlineKeyboardButton("⭐1", callback_data=f"rate:{ticket.id}:1"),
+                                InlineKeyboardButton("⭐2", callback_data=f"rate:{ticket.id}:2"),
+                                InlineKeyboardButton("⭐3", callback_data=f"rate:{ticket.id}:3"),
+                                InlineKeyboardButton("⭐4", callback_data=f"rate:{ticket.id}:4"),
+                                InlineKeyboardButton("⭐5", callback_data=f"rate:{ticket.id}:5"),
+                            ]
+                        ])
                         await self.bot.send_message(
                             chat_id=int(customer_chat_id),
-                            text="您的会话已结束。如有新问题，随时发消息联系我们。👋",
+                            text="您的会话已结束。请为本次服务评分：",
+                            reply_markup=keyboard,
+                        )
+                    else:
+                        # Other channels: plain text close message
+                        await self._send_to_customer(
+                            customer_chat_id,
+                            "您的会话已结束。如有新问题，随时发消息联系我们。👋",
+                        )
+                except Exception:
+                    try:
+                        await self._send_to_customer(
+                            customer_chat_id,
+                            "您的会话已结束。如有新问题，随时发消息联系我们。👋",
                         )
                     except Exception:
                         pass
@@ -407,7 +530,8 @@ class TopicBridgeMiddleware(Middleware):
         elif cmd == "history":
             # Show ALL message history across all tickets for this customer
             if customer_chat_id:
-                all_tickets = await self.db.find_all_tickets_by_chat("telegram", customer_chat_id)
+                cc = self._customer_channel.get(customer_chat_id, "telegram")
+                all_tickets = await self.db.find_all_tickets_by_chat(cc, customer_chat_id)
                 if all_tickets:
                     lines = []
                     for ticket in all_tickets:
@@ -461,9 +585,10 @@ class TopicBridgeMiddleware(Middleware):
                     )
 
         elif cmd == "user":
-            # Show ERP user info
+            # Show ERP user info (strip u_ prefix for stable keys)
             if customer_chat_id:
-                erp_info = await self._fetch_erp_user_info(customer_chat_id)
+                lookup_id = customer_chat_id[2:] if customer_chat_id.startswith("u_") else customer_chat_id
+                erp_info = await self._fetch_erp_user_info(lookup_id)
                 await self.bot.send_message(
                     chat_id=self.group_chat_id,
                     message_thread_id=thread_id,
@@ -604,7 +729,7 @@ class TopicBridgeMiddleware(Middleware):
     # Topic Management
     # =========================================================================
 
-    async def _get_or_create_topic(self, customer_chat_id: str, customer_name: str) -> int:
+    async def _get_or_create_topic(self, customer_chat_id: str, customer_name: str, channel: str = "telegram") -> int:
         if customer_chat_id in self._topic_cache:
             logger.info("topic cache hit: %s → thread=%s", customer_chat_id, self._topic_cache[customer_chat_id])
             return self._topic_cache[customer_chat_id]
@@ -616,6 +741,11 @@ class TopicBridgeMiddleware(Middleware):
             is_closed = bool(row["closed"])
             self._topic_cache[customer_chat_id] = thread_id
             self._reverse_cache[thread_id] = customer_chat_id
+            # Restore channel (update if user switched channels)
+            saved_channel = row.get("channel", "telegram")
+            if channel != saved_channel:
+                await self._save_topic_channel(customer_chat_id, channel)
+            self._customer_channel[customer_chat_id] = channel
             # Load saved language
             lang = row["user_lang"]
             if lang:
@@ -654,14 +784,15 @@ class TopicBridgeMiddleware(Middleware):
             self._topic_cache[customer_chat_id] = thread_id
             self._reverse_cache[thread_id] = customer_chat_id
 
-            await self._save_topic_mapping(customer_chat_id, thread_id)
+            await self._save_topic_mapping(customer_chat_id, thread_id, channel)
 
             # Build welcome message with optional ERP user info
+            _channel_labels = {"telegram": "Telegram", "webchat": "Web Chat", "whatsapp": "WhatsApp", "discord": "Discord", "line": "LINE", "wechat": "WeChat", "slack": "Slack"}
             welcome = (
                 f"📋 新会话\n"
                 f"• 用户: {customer_name}\n"
                 f"• Chat ID: {customer_chat_id}\n"
-                f"• 来源: telegram DM\n"
+                f"• 来源: {_channel_labels.get(channel, channel)}\n"
             )
             erp_info = await self._fetch_erp_user_info(customer_chat_id)
             if erp_info:
@@ -684,15 +815,15 @@ class TopicBridgeMiddleware(Middleware):
     # =========================================================================
 
     async def _load_topic_row(self, customer_chat_id: str) -> dict | None:
-        """Load full topic mapping row (thread_id, user_lang, closed)."""
+        """Load full topic mapping row (thread_id, user_lang, closed, channel)."""
         try:
             async with self.db._db.execute(
-                "SELECT thread_id, user_lang, closed FROM topic_mappings WHERE customer_chat_id = ?",
+                "SELECT thread_id, user_lang, closed, channel FROM topic_mappings WHERE customer_chat_id = ?",
                 (customer_chat_id,),
             ) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    return {"thread_id": int(row[0]), "user_lang": row[1], "closed": row[2] or 0}
+                    return {"thread_id": int(row[0]), "user_lang": row[1], "closed": row[2] or 0, "channel": row[3] or "telegram"}
                 return None
         except Exception:
             return None
@@ -701,6 +832,8 @@ class TopicBridgeMiddleware(Middleware):
         """Fetch and format orders for display in agent topic."""
         if not self.erp:
             return "❌ ERP 未配置"
+        if not args and self._is_guest(customer_chat_id):
+            return "👤 游客用户，无订单记录"
         try:
             # If arg provided, treat as order ID search
             if args:
@@ -709,7 +842,8 @@ class TopicBridgeMiddleware(Middleware):
                 # Try by thirdId (Telegram ID) first, then userId via binding
                 result = await self.erp.get_orders(third_id=customer_chat_id, page_size=5)
                 if not result.orders:
-                    binding = await self.db.get_binding_by_chat("telegram", customer_chat_id)
+                    cc = self._customer_channel.get(customer_chat_id, "telegram")
+                    binding = await self.db.get_binding_by_chat(cc, customer_chat_id)
                     if binding:
                         result = await self.erp.get_orders(user_id=binding.platform_user_id, page_size=5)
             text = result.summary_for_agent()
@@ -721,18 +855,26 @@ class TopicBridgeMiddleware(Middleware):
             logger.warning("Order lookup failed for %s: %s", customer_chat_id, e)
             return f"❌ 订单查询失败: {e}"
 
+    def _is_guest(self, customer_chat_id: str) -> bool:
+        """Check if customer is an anonymous/guest user (no ERP account)."""
+        return customer_chat_id.startswith("guest_") or customer_chat_id.startswith("anon_")
+
     async def _fetch_erp_user_info(self, customer_chat_id: str) -> str | None:
         """Fetch and format ERP user info for display in agent topic."""
         if not self.erp:
             return None
+        if self._is_guest(customer_chat_id):
+            return None
         try:
-            # Try direct lookup by chat_id (Telegram user ID)
-            user_info = await self.erp.get_user_info(customer_chat_id)
+            # Prefer binding (platform_user_id = real ERP userId)
+            cc = self._customer_channel.get(customer_chat_id, "telegram")
+            binding = await self.db.get_binding_by_chat(cc, customer_chat_id)
+            user_info = None
+            if binding:
+                user_info = await self.erp.get_user_info(binding.platform_user_id)
             if not user_info:
-                # Try via customer binding
-                binding = await self.db.get_binding_by_chat("telegram", customer_chat_id)
-                if binding:
-                    user_info = await self.erp.get_user_info(binding.platform_user_id)
+                # Fallback: try chat_id directly (works if chat_id happens to be userId)
+                user_info = await self.erp.get_user_info(customer_chat_id)
             if user_info:
                 return user_info.summary_for_agent()
         except Exception as e:
@@ -741,7 +883,8 @@ class TopicBridgeMiddleware(Middleware):
 
     async def _get_customer_summary(self, customer_chat_id: str) -> str:
         """Build a brief summary of previous conversations for this customer."""
-        all_tickets = await self.db.find_all_tickets_by_chat("telegram", customer_chat_id)
+        cc = self._customer_channel.get(customer_chat_id, "telegram")
+        all_tickets = await self.db.find_all_tickets_by_chat(cc, customer_chat_id)
         if not all_tickets:
             return "📋 首次联系"
         total = len(all_tickets)
@@ -764,22 +907,35 @@ class TopicBridgeMiddleware(Middleware):
     async def _load_customer_for_topic(self, thread_id: int) -> str | None:
         try:
             async with self.db._db.execute(
-                "SELECT customer_chat_id FROM topic_mappings WHERE thread_id = ?",
+                "SELECT customer_chat_id, channel FROM topic_mappings WHERE thread_id = ?",
                 (thread_id,),
             ) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    self._reverse_cache[thread_id] = row[0]
-                    self._topic_cache[row[0]] = thread_id
-                    return row[0]
+                    cid = row[0]
+                    self._reverse_cache[thread_id] = cid
+                    self._topic_cache[cid] = thread_id
+                    if row[1]:
+                        self._customer_channel[cid] = row[1]
+                    return cid
         except Exception:
             pass
         return None
 
-    async def _save_topic_mapping(self, customer_chat_id: str, thread_id: int) -> None:
+    async def _save_topic_mapping(self, customer_chat_id: str, thread_id: int, channel: str = "telegram") -> None:
         await self.db._db.execute(
-            "INSERT OR REPLACE INTO topic_mappings (customer_chat_id, thread_id) VALUES (?, ?)",
-            (customer_chat_id, thread_id),
+            """INSERT INTO topic_mappings (customer_chat_id, thread_id, channel)
+               VALUES (?, ?, ?)
+               ON CONFLICT(customer_chat_id) DO UPDATE SET
+               thread_id=excluded.thread_id, channel=excluded.channel""",
+            (customer_chat_id, thread_id, channel),
+        )
+        await self.db._db.commit()
+
+    async def _save_topic_channel(self, customer_chat_id: str, channel: str) -> None:
+        await self.db._db.execute(
+            "UPDATE topic_mappings SET channel = ? WHERE customer_chat_id = ?",
+            (channel, customer_chat_id),
         )
         await self.db._db.commit()
 

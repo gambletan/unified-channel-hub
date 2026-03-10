@@ -27,6 +27,11 @@ class AgentReplyMiddleware(Middleware):
         if (msg.metadata or {}).get("topic_bridge"):
             return await next_handler(msg)
 
+        # Skip non-threaded Telegram messages — agents reply via group topics, not private chat
+        # Only skip for telegram; other channels (webchat, whatsapp) don't use thread_id
+        if msg.channel == "telegram" and not msg.thread_id:
+            return await next_handler(msg)
+
         # Check if sender is a registered agent
         agent = await self.db.find_agent_by_chat(msg.channel, msg.chat_id or "")
         if not agent:

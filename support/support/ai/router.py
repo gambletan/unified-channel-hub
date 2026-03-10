@@ -69,8 +69,13 @@ class AIRouter:
         self,
         customer_text: str,
         history: list[dict[str, str]] | None = None,
+        user_context: str | None = None,
     ) -> str:
-        """Search KB, build context, call LLM, return reply."""
+        """Search KB, build context, call LLM, return reply.
+
+        Args:
+            user_context: Optional ERP user/order info to inject into prompt.
+        """
         start = time.monotonic()
 
         # Search knowledge base
@@ -79,6 +84,10 @@ class AIRouter:
 
         # Build system prompt
         system_prompt = self.system_prompt_template.format(kb_context=kb_context)
+
+        # Inject user/order context if available
+        if user_context:
+            system_prompt += f"\n\n--- Customer Info ---\n{user_context}\n--- End Customer Info ---"
 
         # Build messages
         messages = list(history or [])

@@ -233,9 +233,10 @@ class WebChatAdapter(ChannelAdapter):
 
                         # Handle auth message (upgrade anonymous → authenticated)
                         if data.get("type") == "auth":
+                            auth_user_id = data.get("user_id") or ""
                             user_info.update({
                                 "user_type": "authenticated",
-                                "user_id": data.get("user_id"),
+                                "user_id": auth_user_id,
                                 "name": data.get("name"),
                                 "phone": data.get("phone"),
                                 "extra": data.get("extra", {}),
@@ -246,7 +247,27 @@ class WebChatAdapter(ChannelAdapter):
                                 "text": "authenticated",
                                 "user_type": "authenticated",
                             })
-                            logger.info("webchat session %s upgraded to authenticated: %s", session_id, data.get("user_id"))
+                            # Emit a bind message so middleware can link session → platform user
+                            if auth_user_id:
+                                bind_msg = UnifiedMessage(
+                                    id=uuid.uuid4().hex[:8],
+                                    channel="webchat",
+                                    sender=Identity(
+                                        id=auth_user_id,
+                                        username=auth_user_id,
+                                        display_name=data.get("name") or auth_user_id,
+                                    ),
+                                    content=MessageContent(
+                                        type=ContentType.COMMAND,
+                                        text=f"uid_{auth_user_id}",
+                                        command="bind",
+                                        args=[auth_user_id],
+                                    ),
+                                    chat_id=session_id,
+                                    metadata={"user_info": user_info, "auth_upgrade": True, "previous_session_id": session_id},
+                                )
+                                await self._queue.put(bind_msg)
+                            logger.info("webchat session %s upgraded to authenticated: %s", session_id, auth_user_id)
                             continue
 
                         unified = self._parse_message(session_id, data)

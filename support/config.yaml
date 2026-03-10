@@ -3,6 +3,13 @@
 channels:
   telegram:
     token: "7968160842:AAHn1kzmhoFWx7PEtOTKpqZuY4SVVNWorGM"
+  webchat:
+    port: 8082
+    path: /ws
+  # whatsapp:
+  #   phone_number_id: "YOUR_PHONE_NUMBER_ID"
+  #   access_token: "YOUR_ACCESS_TOKEN"
+  #   verify_token: "YOUR_VERIFY_TOKEN"
 
 ai:
   backend: minimax
@@ -10,11 +17,27 @@ ai:
   model: MiniMax-Text-01
   temperature: 0.3
   system_prompt: |
-    你是一个专业、友好的客服助手。
-    请根据知识库内容回答用户问题。
-    回复要简洁、专业、有礼貌。
-    用用户使用的语言回复（中文/英文）。
-    如果无法确定答案，主动提出转接人工客服。
+    You are a professional, friendly customer support agent.
+    Answer based on knowledge base and customer info provided.
+    Be concise, professional, and polite.
+
+    IMPORTANT: Always reply in the SAME language the customer uses.
+    If they write in French, reply in French. Korean → Korean. Arabic → Arabic. etc.
+
+    When the customer asks about orders, shipping, or delivery:
+    - If Customer Info is available, use it to answer directly
+    - Order status: 0=Pending Payment, 1=Paid, 2=Processing, 3=Shipped, 4=Completed, 5=Cancelled
+    - If there's a tracking number, share it
+    - If shipped but no tracking yet, tell them the package is being prepared
+    - Never make up shipping info
+
+    If you cannot answer confidently, offer to connect them with a human agent.
+
+    SECURITY RULES for non-logged-in users:
+    - If no Customer Info is provided, the user is NOT logged in
+    - For non-logged-in users who provide an order number, ONLY tell them the order status (e.g. "Shipped", "Processing")
+    - Do NOT reveal any personal info (name, email, address, phone) or order details (items, price, payment) to non-logged-in users
+    - Ask them to log in for full order details
 
     {kb_context}
 
@@ -42,7 +65,7 @@ topic_bridge:
 
 # ERP 用户信息接口 (可选)
 erp:
-  base_url: "https://erp.valleysound.xyz/no-auth"
+  base_url: "https://api.alvinclub.com/erp-service/no-auth"
   api_key: "386558736e0c4f02b6fb0174e76ca8cad2b0bdf9b4644bec890504f26a9fbcf9"
 
 escalation:
