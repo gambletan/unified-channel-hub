@@ -1,1 +1,0 @@
-&Box<(dyn Fn(unified_channel::UnifiedMessage) -> Pin<Box<(dyn Future<Output = unified_channel::HandlerResult> + std::marker::Send + 'static)>> + std::marker::Send + Sync + 'static)>

@@ -1,2 +1,0 @@
-*const Box<dyn Fn(UnifiedMessage) -> Pin<Box<(dyn std::future::Future<Output = HandlerResult> + Send + 'static)>> + Send + Sync>
-Arc<(dyn Fn(UnifiedMessage) -> Pin<Box<(dyn std::future::Future<Output = HandlerResult> + Send + 'static)>> + Send + Sync + 'static)>

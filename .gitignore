@@ -24,3 +24,6 @@ java/target/
 
 # OS
 .DS_Store
+
+# Rust
+rust/target/
