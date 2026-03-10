@@ -50,6 +50,7 @@ class DashboardAPI:
         self._app.router.add_get("/api/agents", self._list_agents)
         self._app.router.add_get("/api/analytics", self._get_analytics)
         self._app.router.add_get("/api/connect-links/{uid}", self._get_connect_links)
+        self._app.router.add_get("/api/connect-session/{session_id}", self._get_connect_session)
         self._app.router.add_get("/api/connect-config", self._get_connect_config)
         self._app.router.add_get("/api/user/{uid}/bindings", self._get_user_bindings)
         self._app.router.add_get("/ws", self._websocket_handler)
@@ -235,36 +236,49 @@ class DashboardAPI:
             self._tg_bot_username = ""
             return None
 
-    def _build_channel_links(self, uid: str | None = None) -> dict:
-        """Build channel links/info from config, optionally personalized with uid."""
+    def _build_channel_links(self, uid: str | None = None, session_id: str | None = None) -> dict:
+        """Build channel links/info from config.
+
+        Args:
+            uid: Platform user ID (authenticated user) — generates uid_xxx deep links.
+            session_id: Webchat session ID (anonymous user) — generates sid_xxx deep links
+                        so the new channel gets linked to the existing webchat topic.
+        """
         links = {}
         cfg = self._channels_config
 
+        # Determine the start/bind payload: uid takes priority over session_id
+        if uid:
+            payload = f"uid_{uid}"
+        elif session_id:
+            payload = f"sid_{session_id}"
+        else:
+            payload = None
+
         if "telegram" in cfg and self._tg_bot_username:
             bot = self._tg_bot_username
-            if uid:
-                links["telegram"] = {"url": f"https://t.me/{bot}?start=uid_{uid}", "name": "Telegram", "icon": "✈️"}
+            if payload:
+                links["telegram"] = {"url": f"https://t.me/{bot}?start={payload}", "name": "Telegram", "icon": "✈️"}
             else:
                 links["telegram"] = {"url": f"https://t.me/{bot}", "name": "Telegram", "icon": "✈️"}
 
         if "whatsapp" in cfg:
             wa_number = cfg["whatsapp"].get("phone_number_id", "")
             if wa_number:
-                url = f"https://wa.me/{wa_number}" + (f"?text=uid_{uid}" if uid else "")
+                url = f"https://wa.me/{wa_number}" + (f"?text={payload}" if payload else "")
                 links["whatsapp"] = {"url": url, "name": "WhatsApp", "icon": "📱"}
 
         if "line" in cfg:
-            line_id = cfg["line"].get("channel_access_token", "")
             line_bot_id = cfg["line"].get("bot_id", "")
             if line_bot_id:
-                url = f"https://line.me/R/oaMessage/{line_bot_id}/" + (f"?uid_{uid}" if uid else "")
+                url = f"https://line.me/R/oaMessage/{line_bot_id}/" + (f"?{payload}" if payload else "")
                 links["line"] = {"url": url, "name": "LINE", "icon": "🟢"}
 
         if "webchat" in cfg:
-            wc = cfg["webchat"]
-            port = wc.get("port", 8082)
             if uid:
                 links["webchat"] = {"url": f"/chat.html?user_id={uid}", "name": "网页聊天 Web Chat", "icon": "🌐"}
+            elif session_id:
+                links["webchat"] = {"url": f"/chat.html?session_id={session_id}", "name": "网页聊天 Web Chat", "icon": "🌐"}
             else:
                 links["webchat"] = {"url": "/chat.html", "name": "网页聊天 Web Chat", "icon": "🌐"}
 
@@ -280,8 +294,9 @@ class DashboardAPI:
         → { uid, links: { telegram: {url, name, icon}, ... }, qr_url }
         """
         uid = request.match_info["uid"]
+        session_id = request.query.get("session_id")
         await self._resolve_tg_bot_username()
-        links = self._build_channel_links(uid)
+        links = self._build_channel_links(uid=uid, session_id=session_id)
 
         # Build the universal QR URL (one QR for all channels)
         # In production, use the public base URL; for now, use request host
@@ -294,6 +309,30 @@ class DashboardAPI:
             "links": links,
             "universal_url": universal_url,
             "qr_page": f"/connect.html?uid={uid}",
+        })
+
+    async def _get_connect_session(self, request: web.Request) -> web.Response:
+        """Generate channel links for an anonymous webchat session.
+
+        The webchat frontend calls this so the user can switch to Telegram/WhatsApp
+        while keeping the same conversation topic.
+
+        GET /api/connect-session/abc123def456
+        → { session_id, links: { telegram: {url, ...}, ... }, universal_url }
+        """
+        session_id = request.match_info["session_id"]
+        await self._resolve_tg_bot_username()
+        links = self._build_channel_links(session_id=session_id)
+
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        universal_url = f"{scheme}://{host}/connect.html?session_id={session_id}"
+
+        return web.json_response({
+            "session_id": session_id,
+            "links": links,
+            "universal_url": universal_url,
+            "qr_page": f"/connect.html?session_id={session_id}",
         })
 
     async def _get_connect_config(self, request: web.Request) -> web.Response:

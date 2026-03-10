@@ -116,6 +116,11 @@ class TopicBridgeMiddleware(Middleware):
         if not text.strip():
             return await next_handler(msg)
 
+        # --- Cross-channel session link (e.g. Telegram user scanned webchat QR) ---
+        link_session = (msg.metadata or {}).get("link_session_id")
+        if link_session:
+            return await self._handle_session_link(msg, chat_id, link_session)
+
         # --- Auth upgrade (guest → registered user) ---
         if (msg.metadata or {}).get("auth_upgrade") and chat_id:
             return await self._handle_auth_upgrade(msg, chat_id, next_handler)
@@ -126,6 +131,75 @@ class TopicBridgeMiddleware(Middleware):
 
         # --- Customer DM ---
         return await self._handle_customer_dm(msg, next_handler, text)
+
+    # =========================================================================
+    # Cross-channel Session Link
+    # =========================================================================
+
+    async def _handle_session_link(self, msg: UnifiedMessage, chat_id: str, session_id: str) -> Any:
+        """User scanned QR from webchat — link their new channel to the existing topic.
+
+        e.g. User was chatting on webchat (session abc123), scans QR with Telegram,
+        sends /start sid_abc123 → we link Telegram chat to the same topic.
+        """
+        channel = msg.channel or "telegram"
+        customer_name = (
+            msg.sender.display_name or msg.sender.username or chat_id
+        ) if msg.sender else chat_id
+
+        # Find existing topic by webchat session_id
+        thread_id = self._topic_cache.get(session_id)
+        if not thread_id:
+            row = await self._load_topic_row(session_id)
+            if row:
+                thread_id = row["thread_id"]
+
+        if not thread_id:
+            # No existing topic for this session — treat as normal customer DM
+            logger.info("Session link: no topic found for session %s, treating as new", session_id)
+            return "Welcome! How can we help? 😊"
+
+        # Link this new channel's chat_id to the same topic
+        self._topic_cache[chat_id] = thread_id
+        self._reverse_cache[thread_id] = chat_id
+        self._customer_channel[chat_id] = channel
+
+        # Save new mapping in DB (keep old session mapping too)
+        await self._save_topic_mapping(chat_id, thread_id, channel)
+
+        # Notify in topic
+        _channel_labels = {"telegram": "Telegram", "webchat": "Web Chat", "whatsapp": "WhatsApp",
+                           "discord": "Discord", "line": "LINE", "wechat": "WeChat", "slack": "Slack"}
+        try:
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                text=(
+                    f"🔗 用户切换渠道\n"
+                    f"• 新渠道: {_channel_labels.get(channel, channel)}\n"
+                    f"• Chat ID: {chat_id}\n"
+                    f"• 用户: {customer_name}\n"
+                    f"后续消息将通过 {_channel_labels.get(channel, channel)} 发送"
+                ),
+            )
+            # Update topic title
+            await self.bot.edit_forum_topic(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                name=f"👤 {customer_name}",
+            )
+        except Exception as e:
+            logger.warning("Failed to notify session link: %s", e)
+
+        logger.info("Session link: %s:%s → topic %s (from session %s)", channel, chat_id, thread_id, session_id)
+
+        # Send welcome to the new channel
+        try:
+            await self._send_to_customer(chat_id, "已连接到您之前的会话，请继续对话 😊\nConnected to your previous session. Continue chatting!")
+        except Exception:
+            pass
+
+        return None
 
     # =========================================================================
     # Auth Upgrade (guest → registered)

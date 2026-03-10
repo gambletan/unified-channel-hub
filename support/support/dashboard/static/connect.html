@@ -51,32 +51,38 @@ h1 { font-size: 24px; margin-bottom: 8px; }
 <script>
 const params = new URLSearchParams(location.search);
 const uid = params.get('uid');
+const sessionId = params.get('session_id');
 
 async function init() {
-  // Show UID badge
+  // Show identity badge
   const uidEl = document.getElementById('uid-display');
   if (uid) {
     uidEl.innerHTML = `<span class="uid-badge">User: ${uid}</span>`;
+  } else if (sessionId) {
+    uidEl.innerHTML = `<span class="uid-badge">Session: ${sessionId.slice(0,8)}...</span>`;
   } else {
     uidEl.innerHTML = `<p class="no-uid">游客模式 · Guest mode</p>`;
   }
 
-  // Fetch channel config
+  // Fetch channel links based on context
   let channels = [];
   try {
+    let res;
     if (uid) {
-      const res = await fetch(`/api/connect-links/${uid}`);
-      if (res.ok) {
-        const data = await res.json();
+      res = await fetch(`/api/connect-links/${uid}`);
+    } else if (sessionId) {
+      res = await fetch(`/api/connect-session/${sessionId}`);
+    } else {
+      res = await fetch('/api/connect-config');
+    }
+    if (res.ok) {
+      const data = await res.json();
+      if (data.links) {
         channels = Object.entries(data.links).map(([type, info]) => ({
           type, name: info.name, icon: info.icon, url: info.url, class: type
         }));
-      }
-    } else {
-      const res = await fetch('/api/connect-config');
-      if (res.ok) {
-        const data = await res.json();
-        channels = data.channels || [];
+      } else if (data.channels) {
+        channels = data.channels;
       }
     }
   } catch (e) {
