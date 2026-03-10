@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Any
 
+import aiohttp
 from aiohttp import web
 
 from ..analytics.metrics import Analytics
@@ -26,12 +27,15 @@ class DashboardAPI:
         send_fn: Any = None,
         port: int = 8081,
         host: str = "127.0.0.1",
+        channels_config: dict | None = None,
     ):
         self.db = db
         self.analytics = analytics
         self.send_fn = send_fn
         self.port = port
         self.host = host
+        self._channels_config = channels_config or {}
+        self._tg_bot_username: str | None = None  # resolved lazily
         self._ws_clients: list[web.WebSocketResponse] = []
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
@@ -46,6 +50,7 @@ class DashboardAPI:
         self._app.router.add_get("/api/agents", self._list_agents)
         self._app.router.add_get("/api/analytics", self._get_analytics)
         self._app.router.add_get("/api/connect-links/{uid}", self._get_connect_links)
+        self._app.router.add_get("/api/connect-config", self._get_connect_config)
         self._app.router.add_get("/api/user/{uid}/bindings", self._get_user_bindings)
         self._app.router.add_get("/ws", self._websocket_handler)
         # Static files
@@ -58,6 +63,8 @@ class DashboardAPI:
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
+        # Pre-resolve Telegram bot username for QR code generation
+        await self._resolve_tg_bot_username()
         logger.info("Dashboard running at http://%s:%d", self.host, self.port)
 
     async def stop(self) -> None:
@@ -204,6 +211,65 @@ class DashboardAPI:
         summary = await self.analytics.summary()
         return web.json_response(summary)
 
+    async def _resolve_tg_bot_username(self) -> str | None:
+        """Resolve Telegram bot username from token via getMe API (cached)."""
+        if self._tg_bot_username is not None:
+            return self._tg_bot_username or None
+        tg_cfg = self._channels_config.get("telegram", {})
+        token = tg_cfg.get("token")
+        if not token:
+            self._tg_bot_username = ""
+            return None
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    data = await resp.json()
+                    username = data.get("result", {}).get("username", "")
+                    self._tg_bot_username = username
+                    logger.info("Resolved Telegram bot username: @%s", username)
+                    return username or None
+        except Exception as e:
+            logger.warning("Failed to resolve Telegram bot username: %s", e)
+            self._tg_bot_username = ""
+            return None
+
+    def _build_channel_links(self, uid: str | None = None) -> dict:
+        """Build channel links/info from config, optionally personalized with uid."""
+        links = {}
+        cfg = self._channels_config
+
+        if "telegram" in cfg and self._tg_bot_username:
+            bot = self._tg_bot_username
+            if uid:
+                links["telegram"] = {"url": f"https://t.me/{bot}?start=uid_{uid}", "name": "Telegram", "icon": "✈️"}
+            else:
+                links["telegram"] = {"url": f"https://t.me/{bot}", "name": "Telegram", "icon": "✈️"}
+
+        if "whatsapp" in cfg:
+            wa_number = cfg["whatsapp"].get("phone_number_id", "")
+            if wa_number:
+                url = f"https://wa.me/{wa_number}" + (f"?text=uid_{uid}" if uid else "")
+                links["whatsapp"] = {"url": url, "name": "WhatsApp", "icon": "📱"}
+
+        if "line" in cfg:
+            line_id = cfg["line"].get("channel_access_token", "")
+            line_bot_id = cfg["line"].get("bot_id", "")
+            if line_bot_id:
+                url = f"https://line.me/R/oaMessage/{line_bot_id}/" + (f"?uid_{uid}" if uid else "")
+                links["line"] = {"url": url, "name": "LINE", "icon": "🟢"}
+
+        if "webchat" in cfg:
+            wc = cfg["webchat"]
+            port = wc.get("port", 8082)
+            if uid:
+                links["webchat"] = {"url": f"/chat.html?user_id={uid}", "name": "网页聊天 Web Chat", "icon": "🌐"}
+            else:
+                links["webchat"] = {"url": "/chat.html", "name": "网页聊天 Web Chat", "icon": "🌐"}
+
+        return links
+
     async def _get_connect_links(self, request: web.Request) -> web.Response:
         """Generate personalized deep links for a platform user.
 
@@ -211,28 +277,38 @@ class DashboardAPI:
         links/QR codes that bind IM identity to the platform account.
 
         GET /api/connect-links/USER123
-        → { telegram: "https://t.me/bot?start=uid_USER123", ... }
+        → { uid, links: { telegram: {url, name, icon}, ... }, qr_url }
         """
         uid = request.match_info["uid"]
-        # Build links for all configured channels
-        links = {}
-        # These would be configured per-deployment; here are templates
-        bot_configs = {
-            "telegram": request.query.get("tg_bot"),
-            "whatsapp": request.query.get("wa_number"),
-            "line": request.query.get("line_id"),
-        }
-        if bot_configs.get("telegram"):
-            links["telegram"] = f"https://t.me/{bot_configs['telegram']}?start=uid_{uid}"
-        if bot_configs.get("whatsapp"):
-            links["whatsapp"] = f"https://wa.me/{bot_configs['whatsapp']}?text=uid_{uid}"
-        if bot_configs.get("line"):
-            links["line"] = f"https://line.me/R/oaMessage/{bot_configs['line']}/?uid_{uid}"
+        await self._resolve_tg_bot_username()
+        links = self._build_channel_links(uid)
 
-        # Universal landing page link
-        links["universal"] = f"/connect.html?uid={uid}"
+        return web.json_response({
+            "uid": uid,
+            "links": links,
+            "qr_page": f"/connect.html?uid={uid}",
+        })
 
-        return web.json_response({"uid": uid, "links": links})
+    async def _get_connect_config(self, request: web.Request) -> web.Response:
+        """Return available channels for the connect landing page (no uid).
+
+        GET /api/connect-config
+        → { channels: [{name, icon, type, url}, ...] }
+        """
+        await self._resolve_tg_bot_username()
+        links = self._build_channel_links()
+
+        channels = []
+        for ch_type, info in links.items():
+            channels.append({
+                "name": info["name"],
+                "icon": info["icon"],
+                "type": ch_type,
+                "url": info["url"],
+                "class": ch_type,
+            })
+
+        return web.json_response({"channels": channels})
 
     async def _get_user_bindings(self, request: web.Request) -> web.Response:
         """Get all channel bindings for a platform user.

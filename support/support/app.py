@@ -193,6 +193,7 @@ async def run(config_path: str = "config.yaml") -> None:
         send_fn=manager.send,
         port=dashboard_config.get("port", 8081),
         host=dashboard_config.get("host", "0.0.0.0"),
+        channels_config=channels_config,
     )
     await dashboard.start()
 
