@@ -11,8 +11,16 @@ from .streaming import StreamingMiddleware, StreamingReply
 from .i18n import I18nMiddleware
 from .scheduler import Scheduler, parse_cron, cron_matches
 from .queue import InMemoryQueue, QueueMiddleware, QueueProcessor
-from .dashboard import Dashboard
-from .voice import VoiceMiddleware, STTProvider, TTSProvider, OpenAISTT, OpenAITTS, WhisperLocalSTT
+
+_LAZY_EXTRAS = {
+    "Dashboard": ".dashboard",
+    "VoiceMiddleware": ".voice",
+    "STTProvider": ".voice",
+    "TTSProvider": ".voice",
+    "OpenAISTT": ".voice",
+    "OpenAITTS": ".voice",
+    "WhisperLocalSTT": ".voice",
+}
 
 _LAZY_ADAPTERS = {
     "TelegramAdapter": ".adapters.telegram",
@@ -39,6 +47,10 @@ _LAZY_ADAPTERS = {
 }
 
 def __getattr__(name):
+    if name in _LAZY_EXTRAS:
+        import importlib
+        module = importlib.import_module(_LAZY_EXTRAS[name], __package__)
+        return getattr(module, name)
     if name in _LAZY_ADAPTERS:
         import importlib
         module = importlib.import_module(_LAZY_ADAPTERS[name], __package__)
@@ -56,7 +68,6 @@ __all__ = [
     "I18nMiddleware",
     "Scheduler", "parse_cron", "cron_matches",
     "InMemoryQueue", "QueueMiddleware", "QueueProcessor",
-    "Dashboard",
-    "VoiceMiddleware", "STTProvider", "TTSProvider", "OpenAISTT", "OpenAITTS", "WhisperLocalSTT",
+    *_LAZY_EXTRAS.keys(),
     *_LAZY_ADAPTERS.keys(),
 ]
