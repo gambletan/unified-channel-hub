@@ -1,0 +1,49 @@
+[package]
+name = "unified-channel"
+version = "0.2.0"
+edition = "2021"
+description = "Unified messaging abstraction across Telegram, Discord, Slack, Email, Matrix, and more"
+license = "MIT"
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+
+# Feature-gated adapter dependencies
+teloxide = { version = "0.13", optional = true, features = ["macros"] }
+serenity = { version = "0.12", optional = true, default-features = false, features = ["client", "gateway", "model", "rustls_backend"] }
+slack-morphism = { version = "2", optional = true }
+lettre = { version = "0.11", optional = true, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+async-imap = { version = "0.10", optional = true }
+async-native-tls = { version = "0.5", optional = true }
+matrix-sdk = { version = "0.7", optional = true }
+reqwest = { version = "0.12", optional = true, features = ["json"] }
+tokio-tungstenite = { version = "0.24", optional = true, features = ["native-tls"] }
+irc = { version = "1", optional = true }
+nostr-sdk = { version = "0.35", optional = true }
+url = { version = "2", optional = true }
+
+[features]
+default = []
+telegram = ["dep:teloxide"]
+discord = ["dep:serenity"]
+slack = ["dep:slack-morphism"]
+email = ["dep:lettre", "dep:async-imap", "dep:async-native-tls"]
+matrix = ["dep:matrix-sdk"]
+twilio = ["dep:reqwest"]
+homeassistant = ["dep:reqwest", "dep:tokio-tungstenite"]
+irc-adapter = ["dep:irc"]
+nostr = ["dep:nostr-sdk"]
+webhook = ["dep:reqwest"]
+mattermost = ["dep:reqwest", "dep:tokio-tungstenite"]
+all-adapters = ["telegram", "discord", "slack", "email", "matrix", "twilio", "homeassistant", "irc-adapter", "nostr", "webhook", "mattermost"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
