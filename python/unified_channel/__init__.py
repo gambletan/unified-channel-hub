@@ -11,7 +11,9 @@ from .streaming import StreamingMiddleware, StreamingReply
 from .i18n import I18nMiddleware
 from .scheduler import Scheduler, parse_cron, cron_matches
 from .queue import InMemoryQueue, QueueMiddleware, QueueProcessor
+from .persistent_queue import SQLiteQueue, QueueItem, PersistentQueueMiddleware
 from .relay import RelayMiddleware, RelayRule
+from .identity import IdentityRouter
 
 _LAZY_EXTRAS = {
     "Dashboard": ".dashboard",
@@ -21,6 +23,10 @@ _LAZY_EXTRAS = {
     "OpenAISTT": ".voice",
     "OpenAITTS": ".voice",
     "WhisperLocalSTT": ".voice",
+    "Attachment": ".media",
+    "MediaType": ".media",
+    "MediaNormalizerMiddleware": ".media",
+    "detect_media_type": ".media",
 }
 
 _LAZY_ADAPTERS = {
@@ -51,6 +57,10 @@ _LAZY_ADAPTERS = {
     "TwilioSMSAdapter": ".adapters.twilio_sms",
     "GoogleCalendarAdapter": ".adapters.google_calendar",
     "HomeAssistantAdapter": ".adapters.homeassistant",
+    "GmailAPIAdapter": ".adapters.gmail_api",
+    "OutlookAdapter": ".adapters.outlook",
+    "SIPAdapter": ".adapters.sip",
+    "AppleCalendarAdapter": ".adapters.apple_calendar",
 }
 
 def __getattr__(name):
@@ -75,6 +85,8 @@ __all__ = [
     "I18nMiddleware",
     "Scheduler", "parse_cron", "cron_matches",
     "InMemoryQueue", "QueueMiddleware", "QueueProcessor",
+    "SQLiteQueue", "QueueItem", "PersistentQueueMiddleware",
+    "IdentityRouter",
     *_LAZY_EXTRAS.keys(),
     *_LAZY_ADAPTERS.keys(),
 ]
