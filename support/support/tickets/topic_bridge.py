@@ -84,6 +84,7 @@ class TopicBridgeMiddleware(Middleware):
         self._customer_channel: dict[str, str] = {}  # customer_chat_id → channel name
         self._user_lang: dict[str, str] = {}         # customer_chat_id → lang code
         self._pending_timers: dict[str, asyncio.Task] = {}  # session → timeout task
+        self._pending_ratings: dict[str, str] = {}         # customer_chat_id → ticket_id (awaiting text rating)
 
     @property
     def bot(self):
@@ -128,6 +129,10 @@ class TopicBridgeMiddleware(Middleware):
         # --- Message from agent group ---
         if str(chat_id) == str(self.group_chat_id):
             return await self._handle_group_message(msg, sender_id, text)
+
+        # --- Pending text-based rating (WhatsApp etc.) ---
+        if chat_id in self._pending_ratings and text.strip() in ("1", "2", "3", "4", "5"):
+            return await self._handle_text_rating(chat_id, int(text.strip()))
 
         # --- Customer DM ---
         return await self._handle_customer_dm(msg, next_handler, text)
@@ -305,7 +310,7 @@ class TopicBridgeMiddleware(Middleware):
                 await self.bot.send_message(
                     chat_id=self.group_chat_id,
                     message_thread_id=topic_id,
-                    text=f"⭐ 用户评分: {'⭐' * rating} ({rating}/5)",
+                    text=f"⭐ Customer rating: {'⭐' * rating} ({rating}/5)",
                 )
             except Exception:
                 pass
@@ -315,13 +320,41 @@ class TopicBridgeMiddleware(Middleware):
             try:
                 query = msg.raw.callback_query
                 if query:
-                    await query.answer(f"感谢评分！{'⭐' * rating}")
-                    await query.edit_message_text(f"感谢您的评价！{'⭐' * rating} ({rating}/5)")
+                    await query.answer(f"Thanks! {'⭐' * rating}")
+                    await query.edit_message_text(f"Thank you for your feedback! {'⭐' * rating} ({rating}/5)")
             except Exception as e:
                 logger.warning("Failed to answer/edit callback: %s", e)
 
         logger.info("Rating %d for ticket %s", rating, ticket_id)
         return None
+
+    async def _handle_text_rating(self, customer_chat_id: str, rating: int) -> None:
+        """Handle text-based rating reply (for WhatsApp and other non-button channels)."""
+        ticket_id = self._pending_ratings.pop(customer_chat_id)
+
+        from ..models import SatisfactionRating
+        await self.db.add_rating(SatisfactionRating(
+            ticket_id=ticket_id, rating=rating,
+        ))
+        await self.db.log_event("rated", ticket_id=ticket_id)
+
+        # Notify in topic
+        topic_id = self._topic_cache.get(customer_chat_id)
+        if topic_id:
+            try:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    text=f"⭐ Customer rating: {'⭐' * rating} ({rating}/5)",
+                )
+            except Exception:
+                pass
+
+        await self._send_to_customer(
+            customer_chat_id,
+            f"Thank you for your feedback! {'⭐' * rating}\nFeel free to message us anytime. 👋",
+        )
+        logger.info("Text rating %d for ticket %s", rating, ticket_id)
 
     # =========================================================================
     # Customer DM → Topic
@@ -347,10 +380,10 @@ class TopicBridgeMiddleware(Middleware):
             msg.metadata = {}
         msg.metadata["topic_bridge"] = True
 
-        # Detect language (only update away from default once, to avoid flapping)
+        # Detect language — always follow the user's latest language
         lang = await self._detect_language(text)
         prev_lang = self._user_lang.get(chat_id, self.default_lang)
-        if prev_lang == self.default_lang and lang != self.default_lang:
+        if lang != prev_lang:
             self._user_lang[chat_id] = lang
             await self._save_user_lang(chat_id, lang)
 
@@ -407,6 +440,10 @@ class TopicBridgeMiddleware(Middleware):
             except Exception:
                 pass
             return "正在为您转接人工客服，请稍候。🙋"
+
+        # Inject detected language so AI replies in the correct language
+        user_lang = self._user_lang.get(chat_id, self.default_lang)
+        msg.metadata["user_lang"] = user_lang
 
         # Run AI pipeline
         result = await next_handler(msg)
@@ -566,20 +603,29 @@ class TopicBridgeMiddleware(Middleware):
                         ])
                         await self.bot.send_message(
                             chat_id=int(customer_chat_id),
-                            text="您的会话已结束。请为本次服务评分：",
+                            text="Your session has ended. Please rate our service:",
                             reply_markup=keyboard,
                         )
                     else:
-                        # Other channels: plain text close message
-                        await self._send_to_customer(
-                            customer_chat_id,
-                            "您的会话已结束。如有新问题，随时发消息联系我们。👋",
+                        # Other channels: plain text close message with rating prompt
+                        rating_text = (
+                            "Your session has ended. Please rate our service:\n\n"
+                            "Reply with a number:\n"
+                            "1 ⭐ — Poor\n"
+                            "2 ⭐⭐ — Fair\n"
+                            "3 ⭐⭐⭐ — Good\n"
+                            "4 ⭐⭐⭐⭐ — Very Good\n"
+                            "5 ⭐⭐⭐⭐⭐ — Excellent\n\n"
+                            "Or just send a new message to start a new conversation. 👋"
                         )
+                        if ticket:
+                            self._pending_ratings[customer_chat_id] = ticket.id
+                        await self._send_to_customer(customer_chat_id, rating_text)
                 except Exception:
                     try:
                         await self._send_to_customer(
                             customer_chat_id,
-                            "您的会话已结束。如有新问题，随时发消息联系我们。👋",
+                            "Your session has ended. Feel free to message us anytime. 👋",
                         )
                     except Exception:
                         pass
@@ -596,7 +642,7 @@ class TopicBridgeMiddleware(Middleware):
                 await self.bot.send_message(
                     chat_id=self.group_chat_id,
                     message_thread_id=thread_id,
-                    text="🔒 会话已关闭",
+                    text="🔒 Session closed",
                 )
             except Exception as e:
                 logger.error("Failed to close topic: %s", e)
@@ -719,7 +765,12 @@ class TopicBridgeMiddleware(Middleware):
         if re.search(r'[\u0400-\u04ff]', text):
             return "ru"
 
-        # Latin script — use LLM
+        # Latin script — short text defaults to English (LLM unreliable on few words)
+        stripped = text.strip()
+        if len(stripped) < 10 and re.match(r'^[a-zA-Z\s!?.,:;]+$', stripped):
+            return "en"
+
+        # Latin script — use LLM for longer text
         if self.router.get_backend("detect_lang") and re.search(r'[a-zA-Z]{3,}', text):
             try:
                 code = await self.router.chat(

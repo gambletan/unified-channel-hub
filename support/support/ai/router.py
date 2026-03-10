@@ -70,11 +70,13 @@ class AIRouter:
         customer_text: str,
         history: list[dict[str, str]] | None = None,
         user_context: str | None = None,
+        user_lang: str | None = None,
     ) -> str:
         """Search KB, build context, call LLM, return reply.
 
         Args:
             user_context: Optional ERP user/order info to inject into prompt.
+            user_lang: Detected language code (e.g. "en", "zh") to force reply language.
         """
         start = time.monotonic()
 
@@ -84,6 +86,11 @@ class AIRouter:
 
         # Build system prompt
         system_prompt = self.system_prompt_template.format(kb_context=kb_context)
+
+        # Force reply language if detected
+        if user_lang:
+            lang_name = {"en": "English", "zh": "Chinese", "fr": "French", "es": "Spanish", "ja": "Japanese", "ko": "Korean", "de": "German", "pt": "Portuguese", "ar": "Arabic", "ru": "Russian", "th": "Thai", "vi": "Vietnamese"}.get(user_lang, user_lang)
+            system_prompt += f"\n\nIMPORTANT: You MUST reply in {lang_name}. Do NOT use any other language."
 
         # Inject user/order context if available
         if user_context:

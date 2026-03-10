@@ -24,5 +24,8 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 Homepage = "https://github.com/gambletan/unified-support"
 Repository = "https://github.com/gambletan/unified-support"
 
+[tool.hatch.build.targets.wheel]
+packages = ["support"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

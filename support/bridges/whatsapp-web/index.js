@@ -124,20 +124,20 @@ app.get("/scan", (req, res) => {
 .card{background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.3)}
 h2{margin-bottom:16px}img{border-radius:8px}
 .ok{color:#25d366;font-size:48px}</style></head>
-<body><div class="card" id="card"><h2>📱 WhatsApp 扫码连接</h2><p id="msg">加载中...</p></div>
+<body><div class="card" id="card"><h2>📱 WhatsApp Scan to Connect</h2><p id="msg">Loading...</p></div>
 <script>
 async function poll(){
   try{
     const r=await fetch('/qr');const d=await r.json();
     if(d.status==='authenticated'){
-      document.getElementById('card').innerHTML='<p class="ok">✅</p><h2>已连接</h2><p>'+d.phone+'</p>';return;
+      document.getElementById('card').innerHTML='<p class="ok">✅</p><h2>Connected</h2><p>'+d.phone+'</p>';return;
     }
     if(d.status==='qr'){
-      document.getElementById('card').innerHTML='<h2>📱 用 WhatsApp 扫码</h2><img src="'+d.qr+'" width="280"><p style="color:#999;margin-top:12px">打开 WhatsApp → 设置 → 关联设备 → 扫描</p>';
+      document.getElementById('card').innerHTML='<h2>📱 Scan with WhatsApp</h2><img src="'+d.qr+'" width="280"><p style="color:#999;margin-top:12px">Open WhatsApp → Settings → Linked Devices → Scan</p>';
     }else{
-      document.getElementById('msg').textContent='初始化中，请稍候...';
+      document.getElementById('msg').textContent='Initializing, please wait...';
     }
-  }catch(e){document.getElementById('msg').textContent='Bridge 未启动';}
+  }catch(e){document.getElementById('msg').textContent='Bridge not running';}
   setTimeout(poll,3000);
 }
 poll();
@@ -146,6 +146,17 @@ poll();
 
 // Status
 app.get("/status", (req, res) => {
+  // Try to populate clientInfo from client.info if ready event was missed
+  if (authenticated && !clientInfo.phone && client.info) {
+    clientInfo = {
+      phone: client.info?.wid?.user || "",
+      name: client.info?.pushname || "",
+      platform: client.info?.platform || "",
+    };
+    if (clientInfo.phone) {
+      console.log(`[whatsapp-bridge] Late-init info: ${clientInfo.name} (${clientInfo.phone})`);
+    }
+  }
   res.json({
     authenticated,
     ...clientInfo,

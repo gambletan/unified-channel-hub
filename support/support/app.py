@@ -182,7 +182,8 @@ async def run(config_path: str = "config.yaml") -> None:
                     user_context = "\n\n".join(parts)
             except Exception as e:
                 logger.warning("ERP context fetch failed: %s", e)
-        return await ai_router.generate_reply(msg.content.text or "", formatted, user_context=user_context)
+        user_lang = (msg.metadata or {}).get("user_lang")
+        return await ai_router.generate_reply(msg.content.text or "", formatted, user_context=user_context, user_lang=user_lang)
 
     # Dashboard
     dashboard_config = config.get("dashboard", {})
