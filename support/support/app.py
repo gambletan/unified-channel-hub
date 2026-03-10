@@ -122,6 +122,22 @@ async def run(config_path: str = "config.yaml") -> None:
         from unified_channel.adapters.telegram import TelegramAdapter
         tg_adapter = manager._channels.get("telegram")
         if isinstance(tg_adapter, TelegramAdapter):
+            # Optional ERP client for user info lookups
+            erp_client = None
+            erp_config = config.get("erp", {})
+            if erp_config.get("base_url"):
+                try:
+                    ac_cs_path = Path(__file__).resolve().parents[3] / "X-Auto" / "AC-Customer-Support"
+                    sys.path.insert(0, str(ac_cs_path))
+                    import erp_client as erp_mod
+                    erp_client = erp_mod.ERPClient(
+                        base_url=erp_config["base_url"],
+                        api_key=erp_config.get("api_key", ""),
+                    )
+                    logger.info("ERP client initialized: %s", erp_config["base_url"])
+                except Exception as e:
+                    logger.warning("ERP client init failed (non-fatal): %s", e)
+
             manager.add_middleware(TopicBridgeMiddleware(
                 db=db,
                 tg_adapter=tg_adapter,
@@ -131,6 +147,7 @@ async def run(config_path: str = "config.yaml") -> None:
                 default_lang=tb_config.get("default_lang", "zh"),
                 reply_timeout=tb_config.get("reply_timeout", 180),
                 sensitive_words=tb_config.get("sensitive_words"),
+                erp_client=erp_client,
             ))
             logger.info("Topic bridge enabled for group %s", tb_config["group_chat_id"])
 

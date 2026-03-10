@@ -64,6 +64,7 @@ class TopicBridgeMiddleware(Middleware):
         default_lang: str = "zh",
         reply_timeout: int = 180,
         sensitive_words: list[str] | None = None,
+        erp_client: Any | None = None,
     ):
         self.db = db
         self.tg = tg_adapter
@@ -73,6 +74,7 @@ class TopicBridgeMiddleware(Middleware):
         self.default_lang = default_lang
         self.reply_timeout = reply_timeout
         self.sensitive_words = sensitive_words or _DEFAULT_SENSITIVE
+        self.erp = erp_client  # Optional ERPClient for user info lookups
 
         # Caches
         self._topic_cache: dict[str, int] = {}      # customer_chat_id → thread_id
@@ -88,6 +90,8 @@ class TopicBridgeMiddleware(Middleware):
         chat_id = msg.chat_id or ""
         sender_id = msg.sender.id if msg.sender else ""
         text = msg.content.text or ""
+
+        logger.info("TopicBridge.process: chat_id=%s sender=%s text=%s", chat_id, sender_id, text[:50])
 
         # Handle rating callbacks
         if msg.content.type == ContentType.CALLBACK and msg.content.callback_data:
@@ -148,8 +152,8 @@ class TopicBridgeMiddleware(Middleware):
                 if query:
                     await query.answer(f"感谢评分！{'⭐' * rating}")
                     await query.edit_message_text(f"感谢您的评价！{'⭐' * rating} ({rating}/5)")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to answer/edit callback: %s", e)
 
         logger.info("Rating %d for ticket %s", rating, ticket_id)
         return None
@@ -345,6 +349,7 @@ class TopicBridgeMiddleware(Middleware):
         customer_chat_id = self._reverse_cache.get(thread_id)
         if not customer_chat_id:
             customer_chat_id = await self._load_customer_for_topic(thread_id)
+        logger.info("agent_command: cmd=%s thread=%s customer=%s cache=%s", cmd, thread_id, customer_chat_id, dict(self._reverse_cache))
 
         if cmd == "close":
             # Close ticket
@@ -381,7 +386,11 @@ class TopicBridgeMiddleware(Middleware):
                         )
                     except Exception:
                         pass
-            # Close topic
+            # Mark topic as closed in DB
+            if customer_chat_id:
+                await self._set_topic_closed(customer_chat_id, True)
+
+            # Close topic in Telegram
             try:
                 await self.bot.close_forum_topic(
                     chat_id=self.group_chat_id,
@@ -396,21 +405,31 @@ class TopicBridgeMiddleware(Middleware):
                 logger.error("Failed to close topic: %s", e)
 
         elif cmd == "history":
-            # Show message history
+            # Show ALL message history across all tickets for this customer
             if customer_chat_id:
-                ticket = await self.db.find_ticket_by_chat("telegram", customer_chat_id)
-                messages = await self.db.get_messages(ticket.id) if ticket else []
-                if messages:
+                all_tickets = await self.db.find_all_tickets_by_chat("telegram", customer_chat_id)
+                if all_tickets:
                     lines = []
-                    for m in messages[-20:]:
-                        icon = {"customer": "👤", "ai": "🤖", "agent": "💬"}.get(m.role, "•")
-                        ts = m.created_at.strftime("%m-%d %H:%M") if m.created_at else ""
-                        lines.append(f"{icon} [{ts}] {m.content[:100]}")
+                    for ticket in all_tickets:
+                        status_icon = {"open": "🟢", "closed": "🔒", "resolved": "✅", "escalated": "🔴", "assigned": "💬"}.get(ticket.status.value, "•")
+                        ts = ticket.created_at.strftime("%m-%d %H:%M")
+                        lines.append(f"\n{'─' * 20}")
+                        lines.append(f"{status_icon} 工单 {ticket.id[:8]} [{ts}] {ticket.subject or ''}")
+                        messages = await self.db.get_messages(ticket.id)
+                        for m in messages[-10:]:
+                            icon = {"customer": "👤", "ai": "🤖", "agent": "💬"}.get(m.role, "•")
+                            mts = m.created_at.strftime("%m-%d %H:%M") if m.created_at else ""
+                            lines.append(f"  {icon} [{mts}] {m.content[:80]}")
+                    text_out = "\n".join(lines)
+                    # Telegram message limit is 4096 chars
+                    if len(text_out) > 4000:
+                        text_out = text_out[-4000:]
+                        text_out = "...(截断)\n" + text_out
                     try:
                         await self.bot.send_message(
                             chat_id=self.group_chat_id,
                             message_thread_id=thread_id,
-                            text="\n".join(lines),
+                            text=text_out,
                         )
                     except Exception:
                         pass
@@ -441,6 +460,26 @@ class TopicBridgeMiddleware(Middleware):
                         text=f"🌐 当前用户语言: {cur_lang} ({_LANG_NAMES.get(cur_lang, cur_lang)})\n用法: /lang en",
                     )
 
+        elif cmd == "user":
+            # Show ERP user info
+            if customer_chat_id:
+                erp_info = await self._fetch_erp_user_info(customer_chat_id)
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=thread_id,
+                    text=erp_info or "❌ 未找到用户信息",
+                )
+
+        elif cmd == "orders":
+            # Show customer orders
+            if customer_chat_id:
+                orders_text = await self._fetch_orders(customer_chat_id, args)
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=thread_id,
+                    text=orders_text,
+                )
+
         elif cmd == "help":
             await self.bot.send_message(
                 chat_id=self.group_chat_id,
@@ -448,7 +487,9 @@ class TopicBridgeMiddleware(Middleware):
                 text=(
                     "📋 可用命令:\n"
                     "/close — 关闭此会话\n"
-                    "/history — 查看历史消息\n"
+                    "/history — 查看全部历史消息\n"
+                    "/user — 查看用户信息(ERP)\n"
+                    "/orders [订单号] — 查看用户订单\n"
                     "/lang [code] — 查看/设置用户语言\n"
                     "/help — 显示此帮助"
                 ),
@@ -565,16 +606,43 @@ class TopicBridgeMiddleware(Middleware):
 
     async def _get_or_create_topic(self, customer_chat_id: str, customer_name: str) -> int:
         if customer_chat_id in self._topic_cache:
+            logger.info("topic cache hit: %s → thread=%s", customer_chat_id, self._topic_cache[customer_chat_id])
             return self._topic_cache[customer_chat_id]
 
-        thread_id = await self._load_topic_from_db(customer_chat_id)
-        if thread_id:
+        # Check DB for existing topic mapping (persists across restarts)
+        row = await self._load_topic_row(customer_chat_id)
+        if row:
+            thread_id = row["thread_id"]
+            is_closed = bool(row["closed"])
             self._topic_cache[customer_chat_id] = thread_id
             self._reverse_cache[thread_id] = customer_chat_id
             # Load saved language
-            lang = await self._load_user_lang(customer_chat_id)
+            lang = row["user_lang"]
             if lang:
                 self._user_lang[customer_chat_id] = lang
+
+            # Reopen if topic was closed
+            if is_closed:
+                try:
+                    await self.bot.reopen_forum_topic(
+                        chat_id=self.group_chat_id,
+                        message_thread_id=thread_id,
+                    )
+                    await self._set_topic_closed(customer_chat_id, False)
+                    # Show previous conversation summary + ERP user info
+                    summary = await self._get_customer_summary(customer_chat_id)
+                    erp_info = await self._fetch_erp_user_info(customer_chat_id)
+                    reopen_text = f"🔓 用户 {customer_name} 发起新会话\n{summary}"
+                    if erp_info:
+                        reopen_text += f"\n\n{erp_info}"
+                    await self.bot.send_message(
+                        chat_id=self.group_chat_id,
+                        message_thread_id=thread_id,
+                        text=reopen_text,
+                    )
+                    logger.info("Reopened topic (thread=%s) for %s", thread_id, customer_chat_id)
+                except Exception as e:
+                    logger.warning("Failed to reopen topic %s: %s", thread_id, e)
             return thread_id
 
         try:
@@ -588,17 +656,22 @@ class TopicBridgeMiddleware(Middleware):
 
             await self._save_topic_mapping(customer_chat_id, thread_id)
 
+            # Build welcome message with optional ERP user info
+            welcome = (
+                f"📋 新会话\n"
+                f"• 用户: {customer_name}\n"
+                f"• Chat ID: {customer_chat_id}\n"
+                f"• 来源: telegram DM\n"
+            )
+            erp_info = await self._fetch_erp_user_info(customer_chat_id)
+            if erp_info:
+                welcome += f"\n{erp_info}\n"
+            welcome += "\n直接回复即可发送给用户。\n输入 /help 查看所有命令。"
+
             await self.bot.send_message(
                 chat_id=self.group_chat_id,
                 message_thread_id=thread_id,
-                text=(
-                    f"📋 新会话\n"
-                    f"• 用户: {customer_name}\n"
-                    f"• Chat ID: {customer_chat_id}\n"
-                    f"• 来源: telegram DM\n\n"
-                    f"直接回复即可发送给用户。\n"
-                    f"输入 /help 查看所有命令。"
-                ),
+                text=welcome,
             )
             logger.info("Created topic (thread=%s) for %s", thread_id, customer_chat_id)
             return thread_id
@@ -610,16 +683,83 @@ class TopicBridgeMiddleware(Middleware):
     # DB Operations
     # =========================================================================
 
-    async def _load_topic_from_db(self, customer_chat_id: str) -> int | None:
+    async def _load_topic_row(self, customer_chat_id: str) -> dict | None:
+        """Load full topic mapping row (thread_id, user_lang, closed)."""
         try:
             async with self.db._db.execute(
-                "SELECT thread_id FROM topic_mappings WHERE customer_chat_id = ?",
+                "SELECT thread_id, user_lang, closed FROM topic_mappings WHERE customer_chat_id = ?",
                 (customer_chat_id,),
             ) as cursor:
                 row = await cursor.fetchone()
-                return int(row[0]) if row else None
+                if row:
+                    return {"thread_id": int(row[0]), "user_lang": row[1], "closed": row[2] or 0}
+                return None
         except Exception:
             return None
+
+    async def _fetch_orders(self, customer_chat_id: str, args: list[str]) -> str:
+        """Fetch and format orders for display in agent topic."""
+        if not self.erp:
+            return "❌ ERP 未配置"
+        try:
+            # If arg provided, treat as order ID search
+            if args:
+                result = await self.erp.get_orders(order_id=args[0])
+            else:
+                # Try by thirdId (Telegram ID) first, then userId via binding
+                result = await self.erp.get_orders(third_id=customer_chat_id, page_size=5)
+                if not result.orders:
+                    binding = await self.db.get_binding_by_chat("telegram", customer_chat_id)
+                    if binding:
+                        result = await self.erp.get_orders(user_id=binding.platform_user_id, page_size=5)
+            text = result.summary_for_agent()
+            # Telegram 4096 char limit
+            if len(text) > 4000:
+                text = text[:4000] + "\n...(截断)"
+            return text
+        except Exception as e:
+            logger.warning("Order lookup failed for %s: %s", customer_chat_id, e)
+            return f"❌ 订单查询失败: {e}"
+
+    async def _fetch_erp_user_info(self, customer_chat_id: str) -> str | None:
+        """Fetch and format ERP user info for display in agent topic."""
+        if not self.erp:
+            return None
+        try:
+            # Try direct lookup by chat_id (Telegram user ID)
+            user_info = await self.erp.get_user_info(customer_chat_id)
+            if not user_info:
+                # Try via customer binding
+                binding = await self.db.get_binding_by_chat("telegram", customer_chat_id)
+                if binding:
+                    user_info = await self.erp.get_user_info(binding.platform_user_id)
+            if user_info:
+                return user_info.summary_for_agent()
+        except Exception as e:
+            logger.warning("ERP user info lookup failed for %s: %s", customer_chat_id, e)
+        return None
+
+    async def _get_customer_summary(self, customer_chat_id: str) -> str:
+        """Build a brief summary of previous conversations for this customer."""
+        all_tickets = await self.db.find_all_tickets_by_chat("telegram", customer_chat_id)
+        if not all_tickets:
+            return "📋 首次联系"
+        total = len(all_tickets)
+        last = all_tickets[-1]
+        last_msgs = await self.db.get_messages(last.id)
+        last_topic = last.subject or (last_msgs[0].content[:40] if last_msgs else "")
+        lines = [f"📋 历史会话: {total} 次"]
+        lines.append(f"最近话题: {last_topic}")
+        if last.resolved_at:
+            lines.append(f"上次结束: {last.resolved_at.strftime('%m-%d %H:%M')}")
+        return "\n".join(lines)
+
+    async def _set_topic_closed(self, customer_chat_id: str, closed: bool) -> None:
+        await self.db._db.execute(
+            "UPDATE topic_mappings SET closed = ? WHERE customer_chat_id = ?",
+            (1 if closed else 0, customer_chat_id),
+        )
+        await self.db._db.commit()
 
     async def _load_customer_for_topic(self, thread_id: int) -> str | None:
         try:
@@ -650,13 +790,3 @@ class TopicBridgeMiddleware(Middleware):
         )
         await self.db._db.commit()
 
-    async def _load_user_lang(self, customer_chat_id: str) -> str | None:
-        try:
-            async with self.db._db.execute(
-                "SELECT user_lang FROM topic_mappings WHERE customer_chat_id = ?",
-                (customer_chat_id,),
-            ) as cursor:
-                row = await cursor.fetchone()
-                return row[0] if row and row[0] else None
-        except Exception:
-            return None

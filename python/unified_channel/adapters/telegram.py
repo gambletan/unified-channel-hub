@@ -97,13 +97,18 @@ class TelegramAdapter(ChannelAdapter):
         self._app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._on_media))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
+        # Error handler to catch unhandled errors
+        async def _error_handler(update, context):
+            logger.error("telegram unhandled error: %s (update=%s)", context.error, update)
+        self._app.add_error_handler(_error_handler)
+
         await self._app.initialize()
         await self._app.start()
 
         if self._mode == "webhook":
             await self._start_webhook()
         else:
-            await self._app.updater.start_polling(drop_pending_updates=True)  # type: ignore[union-attr]
+            await self._app.updater.start_polling(drop_pending_updates=False)  # type: ignore[union-attr]
 
         me = await self._app.bot.get_me()
         self._bot_username = me.username
@@ -221,6 +226,13 @@ class TelegramAdapter(ChannelAdapter):
         if not update.message or not update.message.text:
             return
         text = update.message.text
+        logger.info(
+            "telegram _on_command: chat_id=%s thread=%s from=%s text=%s",
+            update.message.chat_id,
+            update.message.message_thread_id,
+            update.message.from_user.id if update.message.from_user else "?",
+            text[:50],
+        )
         parts = text.split()
         cmd = parts[0].lstrip("/").split("@")[0]  # strip /cmd@botname
         args = parts[1:]
@@ -273,30 +285,40 @@ class TelegramAdapter(ChannelAdapter):
     async def _on_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        if not update.callback_query:
-            return
-        query = update.callback_query
-        await query.answer()
+        try:
+            if not update.callback_query:
+                return
+            query = update.callback_query
+            logger.info("telegram _on_callback: data=%s from=%s chat=%s",
+                        query.data, query.from_user.id if query.from_user else "?",
+                        query.message.chat_id if query.message else "?")
 
-        sender = query.from_user
-        msg = UnifiedMessage(
-            id=str(query.id),
-            channel="telegram",
-            sender=Identity(
-                id=str(sender.id),
-                username=sender.username,
-                display_name=sender.full_name,
-            ),
-            content=MessageContent(
-                type=ContentType.CALLBACK,
-                text=query.data or "",
-                callback_data=query.data,
-            ),
-            chat_id=str(query.message.chat_id) if query.message else None,
-            raw=update,
-        )
-        self._last_activity = datetime.now()
-        await self._queue.put(msg)
+            sender = query.from_user
+            msg = UnifiedMessage(
+                id=str(query.id),
+                channel="telegram",
+                sender=Identity(
+                    id=str(sender.id),
+                    username=sender.username,
+                    display_name=sender.full_name,
+                ),
+                content=MessageContent(
+                    type=ContentType.CALLBACK,
+                    text=query.data or "",
+                    callback_data=query.data,
+                ),
+                chat_id=str(query.message.chat_id) if query.message else None,
+                raw=update,
+            )
+            self._last_activity = datetime.now()
+            await self._queue.put(msg)
+        except Exception as e:
+            logger.error("telegram _on_callback error: %s", e, exc_info=True)
+            # Still try to answer so user doesn't see loading forever
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
 
     def _build_message(
         self, update: Update, content: MessageContent

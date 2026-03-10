@@ -117,7 +117,8 @@ CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics_events(event_type, cr
 CREATE TABLE IF NOT EXISTS topic_mappings (
     customer_chat_id TEXT PRIMARY KEY,
     thread_id INTEGER NOT NULL,
-    user_lang TEXT DEFAULT NULL
+    user_lang TEXT DEFAULT NULL,
+    closed INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_topic_thread ON topic_mappings(thread_id);
 """
@@ -142,8 +143,25 @@ class Database:
         self._db = await aiosqlite.connect(self.path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        # Migrations for existing DBs
+        await self._run_migrations()
         await self._db.commit()
         logger.info("Database connected: %s", self.path)
+
+    async def _run_migrations(self) -> None:
+        """Add columns that may not exist in older databases."""
+        migrations = [
+            ("topic_mappings", "closed", "ALTER TABLE topic_mappings ADD COLUMN closed INTEGER DEFAULT 0"),
+        ]
+        for table, column, sql in migrations:
+            try:
+                async with self._db.execute(f"PRAGMA table_info({table})") as cur:
+                    cols = [row[1] for row in await cur.fetchall()]
+                    if column not in cols:
+                        await self._db.execute(sql)
+                        logger.info("Migration: added %s.%s", table, column)
+            except Exception:
+                pass
 
     async def close(self) -> None:
         if self._db:
@@ -193,6 +211,17 @@ class Database:
             if not row:
                 return None
             return self._row_to_ticket(row)
+
+    async def find_all_tickets_by_chat(self, channel: str, chat_id: str) -> list[Ticket]:
+        """Find ALL tickets for a chat (all statuses), ordered by creation time."""
+        async with self.db.execute(
+            """SELECT * FROM tickets
+               WHERE channel = ? AND chat_id = ?
+               ORDER BY created_at ASC""",
+            (channel, chat_id),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [self._row_to_ticket(r) for r in rows]
 
     async def update_ticket_status(
         self, ticket_id: str, status: TicketStatus, agent_id: str | None = None

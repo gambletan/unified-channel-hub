@@ -40,6 +40,11 @@ topic_bridge:
   default_lang: zh          # 客服默认语言
   reply_timeout: 180        # 秒，超时未回复提醒
 
+# ERP 用户信息接口 (可选)
+erp:
+  base_url: "https://erp.valleysound.xyz/no-auth"
+  api_key: "386558736e0c4f02b6fb0174e76ca8cad2b0bdf9b4644bec890504f26a9fbcf9"
+
 escalation:
   max_ai_turns: 8
 
