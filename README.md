@@ -7,9 +7,9 @@
 
 # unified-channel
 
-**The only lightweight, embeddable messaging library with 18 channels, ServiceBridge, conversation memory, rich output, and streaming — in Python, TypeScript, and Java.**
+**The communication layer for personal AI assistants — IM, Email, Voice, Calendar, IoT in one unified API. Python + TypeScript + Java.**
 
-Not a chatbot platform. Not an AI agent framework. A library you `pip install` / `npm install` / Maven-add into **your** project and call `manager.run()`.
+23 channels across 5 categories. ServiceBridge, conversation memory, rich output, and streaming. Not a chatbot platform — a library you `pip install` / `npm install` / Maven-add into **your** project and call `manager.run()`.
 
 ## Why This Exists
 
@@ -26,7 +26,7 @@ unified-channel gives you the messaging plumbing so you can focus on your actual
 
 | Feature | What it does |
 |---------|-------------|
-| **18 Channels** | Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, Teams, LINE, Feishu, Mattermost, Google Chat, Nextcloud, Synology, Zalo, Nostr, BlueBubbles, Twitch, IRC |
+| **23 Channels, 5 Categories** | **IM**: Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, Teams, LINE, Feishu, Mattermost, Google Chat, Nextcloud, Synology, Zalo, Nostr, BlueBubbles, Twitch, IRC · **Email**: Gmail/IMAP · **Voice**: Twilio Voice · **SMS**: Twilio SMS · **Calendar**: Google Calendar · **IoT**: Home Assistant |
 | **ServiceBridge** | Expose any function as a chat command. Your phone becomes a remote control for your services. |
 | **ConversationMemory** | Per-user/per-channel conversation history. In-memory, SQLite, or Redis backends. |
 | **RichReply** | Send buttons, carousels, images, files — auto-degrades gracefully on platforms that don't support them. |

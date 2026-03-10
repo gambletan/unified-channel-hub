@@ -140,6 +140,9 @@ class WebChatAdapter(ChannelAdapter):
                 "url": msg.media_url,
                 "text": msg.text or "",
             }
+            # Include filename for document/audio downloads
+            if msg.metadata.get("filename"):
+                payload["filename"] = msg.metadata["filename"]
         else:
             payload = {
                 "type": "text",

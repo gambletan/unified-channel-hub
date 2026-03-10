@@ -44,6 +44,12 @@ _LAZY_ADAPTERS = {
     "WeChatAdapter": ".adapters.wechat",
     "DingTalkAdapter": ".adapters.dingtalk",
     "QQAdapter": ".adapters.qq",
+    # Email / Voice / Calendar / IoT
+    "EmailAdapter": ".adapters.email_imap",
+    "TwilioVoiceAdapter": ".adapters.twilio_voice",
+    "TwilioSMSAdapter": ".adapters.twilio_sms",
+    "GoogleCalendarAdapter": ".adapters.google_calendar",
+    "HomeAssistantAdapter": ".adapters.homeassistant",
 }
 
 def __getattr__(name):

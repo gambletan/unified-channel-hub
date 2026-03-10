@@ -49,6 +49,11 @@ wechat = ["pycryptodome>=3.19", "httpx>=0.25", "aiohttp>=3.9"]
 dingtalk = ["httpx>=0.25", "aiohttp>=3.9"]
 qq = ["websockets>=12.0", "httpx>=0.25"]
 irc = []
+email = []  # uses stdlib imaplib/smtplib
+twilio = ["twilio>=9.0", "aiohttp>=3.9"]
+google-calendar = ["google-auth>=2.0", "google-auth-oauthlib>=1.0", "google-api-python-client>=2.0"]
+homeassistant = ["httpx>=0.25", "websockets>=12.0"]
+sms = ["twilio>=9.0", "aiohttp>=3.9"]
 all = [
     "python-telegram-bot>=21.0",
     "discord.py>=2.3",
@@ -62,8 +67,11 @@ all = [
     "aiohttp>=3.9",
     "websockets>=12.0",
     "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-api-python-client>=2.0",
     "secp256k1>=0.14",
     "cryptography>=41.0",
+    "twilio>=9.0",
 ]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "aiohttp>=3.9"]
 
