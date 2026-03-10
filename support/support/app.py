@@ -194,6 +194,7 @@ async def run(config_path: str = "config.yaml") -> None:
         port=dashboard_config.get("port", 8081),
         host=dashboard_config.get("host", "0.0.0.0"),
         channels_config=channels_config,
+        base_url=dashboard_config.get("base_url"),
     )
     await dashboard.start()
 
@@ -229,12 +230,21 @@ def _setup_channels(manager: ChannelManager, channels_config: dict) -> None:
                     bot_token=cfg["bot_token"], app_token=cfg["app_token"]
                 ))
             elif name == "whatsapp":
-                from unified_channel.adapters.whatsapp import WhatsAppAdapter
-                manager.add_channel(WhatsAppAdapter(
-                    phone_number_id=cfg["phone_number_id"],
-                    access_token=cfg["access_token"],
-                    verify_token=cfg.get("verify_token", ""),
-                ))
+                mode = cfg.get("mode", "official")
+                if mode == "unofficial" or cfg.get("bridge_url"):
+                    # whatsapp-web.js bridge (scan QR, no Business API needed)
+                    from unified_channel.adapters.whatsapp_web import WhatsAppWebAdapter
+                    manager.add_channel(WhatsAppWebAdapter(
+                        bridge_url=cfg.get("bridge_url", "http://localhost:8084"),
+                    ))
+                else:
+                    # Official Meta Cloud API
+                    from unified_channel.adapters.whatsapp import WhatsAppAdapter
+                    manager.add_channel(WhatsAppAdapter(
+                        phone_number_id=cfg["phone_number_id"],
+                        access_token=cfg["access_token"],
+                        verify_token=cfg.get("verify_token", ""),
+                    ))
             elif name == "wechat":
                 from unified_channel.adapters.wechat import WeChatWorkAdapter
                 manager.add_channel(WeChatWorkAdapter(

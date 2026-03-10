@@ -9,63 +9,70 @@
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .card { background: white; border-radius: 20px; padding: 40px 32px; max-width: 480px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center; }
 h1 { font-size: 24px; margin-bottom: 8px; }
-.subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
-.qr-section { margin-bottom: 24px; }
+.subtitle { color: #666; margin-bottom: 28px; font-size: 14px; }
+.actions { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
+.action-btn { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 18px 24px; border: 2px solid #eee; border-radius: 14px; font-size: 16px; font-weight: 600; color: #333; cursor: pointer; transition: all 0.2s; text-decoration: none; }
+.action-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.action-btn .icon { font-size: 28px; }
+.action-btn.webchat { background: #667eea; color: white; border-color: #667eea; }
+.action-btn.webchat:hover { background: #5a6fd6; }
+.action-btn.im { border-color: #0088cc; color: #0088cc; }
+.action-btn.im:hover { background: #f0f8ff; }
+.action-btn.im.active { background: #0088cc; color: white; }
+
+/* IM selector (hidden by default) */
+.im-panel { display: none; margin-top: 16px; }
+.im-panel.show { display: block; }
+.im-apps { display: flex; justify-content: center; gap: 12px; margin-bottom: 16px; }
+.im-app { padding: 10px 20px; border: 2px solid #eee; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s; }
+.im-app:hover { border-color: #667eea; }
+.im-app.active { border-color: #0088cc; background: #f0f8ff; }
+.qr-section { margin-top: 16px; }
 .qr-section canvas { border: 3px solid #eee; border-radius: 12px; padding: 8px; }
-.qr-label { font-size: 12px; color: #999; margin-top: 8px; }
-.channels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
-.ch-btn { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border: 2px solid #eee; border-radius: 12px; text-decoration: none; color: #333; font-size: 14px; font-weight: 500; transition: all 0.2s; cursor: pointer; }
-.ch-btn:hover { border-color: #667eea; background: #f8f8ff; transform: translateY(-2px); }
-.ch-btn .icon { font-size: 24px; }
-.ch-btn.telegram { border-color: #0088cc; }
-.ch-btn.whatsapp { border-color: #25d366; }
-.ch-btn.line { border-color: #00b900; }
-.ch-btn.webchat { border-color: #333; grid-column: span 2; justify-content: center; }
-.ch-btn.active { border-color: #667eea; background: #f0f0ff; box-shadow: 0 0 0 3px rgba(102,126,234,0.2); }
-.footer { font-size: 12px; color: #999; margin-top: 16px; }
-.uid-badge { display: inline-block; background: #f0f0ff; color: #667eea; padding: 4px 12px; border-radius: 20px; font-size: 12px; margin-bottom: 16px; font-family: monospace; }
-.no-uid { color: #999; font-size: 13px; margin-bottom: 16px; }
+.qr-label { font-size: 13px; color: #666; margin-top: 10px; }
+
+.footer { font-size: 12px; color: #999; margin-top: 20px; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>👋 需要帮助？</h1>
-  <p class="subtitle">扫码联系客服，自动跳转您的聊天工具<br>Scan to connect — auto-detects your app</p>
+  <p class="subtitle">选择您方便的方式联系客服</p>
 
-  <div id="uid-display"></div>
-
-  <div class="qr-section" id="qr-section" style="display:none">
-    <canvas id="qr-canvas"></canvas>
-    <p class="qr-label" id="qr-label"></p>
+  <div class="actions">
+    <a class="action-btn webchat" id="btn-webchat">
+      <span class="icon">🌐</span>
+      网页聊天 Web Chat
+    </a>
+    <div class="action-btn im" id="btn-im">
+      <span class="icon">📱</span>
+      通过 IM App 扫码沟通
+    </div>
   </div>
 
-  <div class="channels" id="channels">
-    <p style="grid-column:span 2;color:#999">Loading channels...</p>
+  <div class="im-panel" id="im-panel">
+    <div class="im-apps" id="im-apps"></div>
+    <div class="qr-section" id="qr-section" style="display:none">
+      <canvas id="qr-canvas"></canvas>
+      <p class="qr-label" id="qr-label"></p>
+    </div>
   </div>
 
-  <p class="footer">无需下载 APP · 扫码即聊 · Scan & Chat</p>
+  <p class="footer">随时随地 · 即时响应</p>
 </div>
 
-<!-- QR Code generator (lightweight, no dependencies) -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const uid = params.get('uid');
 const sessionId = params.get('session_id');
 
-async function init() {
-  // Show identity badge
-  const uidEl = document.getElementById('uid-display');
-  if (uid) {
-    uidEl.innerHTML = `<span class="uid-badge">User: ${uid}</span>`;
-  } else if (sessionId) {
-    uidEl.innerHTML = `<span class="uid-badge">Session: ${sessionId.slice(0,8)}...</span>`;
-  } else {
-    uidEl.innerHTML = `<p class="no-uid">游客模式 · Guest mode</p>`;
-  }
+let imChannels = [];
+let webchatUrl = null;
+let baseUrl = '';
 
-  // Fetch channel links based on context
-  let channels = [];
+async function init() {
+  // Fetch channel links
   try {
     let res;
     if (uid) {
@@ -77,35 +84,67 @@ async function init() {
     }
     if (res.ok) {
       const data = await res.json();
-      if (data.links) {
-        channels = Object.entries(data.links).map(([type, info]) => ({
-          type, name: info.name, icon: info.icon, url: info.url, class: type
-        }));
-      } else if (data.channels) {
-        channels = data.channels;
-      }
+      if (data.universal_url) baseUrl = data.universal_url.replace(/\/connect\.html.*$/, '');
+      const channels = data.links
+        ? Object.entries(data.links).map(([type, info]) => ({ type, ...info }))
+        : (data.channels || []);
+
+      channels.forEach(c => {
+        if (c.type === 'webchat') {
+          webchatUrl = c.url;
+        } else {
+          imChannels.push(c);
+        }
+      });
     }
   } catch (e) {
     console.warn('Failed to fetch config:', e);
   }
 
-  if (!channels.length) {
-    document.getElementById('channels').innerHTML = '<p style="grid-column:span 2;color:#999">No channels configured</p>';
+  // Webchat button
+  const btnWebchat = document.getElementById('btn-webchat');
+  if (webchatUrl) {
+    btnWebchat.href = webchatUrl;
+    btnWebchat.target = '_blank';
+  } else {
+    btnWebchat.style.display = 'none';
+  }
+
+  // IM button — toggle panel
+  const btnIm = document.getElementById('btn-im');
+  const imPanel = document.getElementById('im-panel');
+  if (!imChannels.length) {
+    btnIm.style.display = 'none';
     return;
   }
 
-  // Show the universal QR code (this page's own URL — one QR for all channels)
-  const universalUrl = location.href;
-  showQR(universalUrl, '任意聊天工具 / Any App');
+  btnIm.addEventListener('click', () => {
+    const showing = imPanel.classList.toggle('show');
+    btnIm.classList.toggle('active', showing);
+    // Auto-select first IM app if none selected
+    if (showing && !document.querySelector('.im-app.active')) {
+      const first = document.querySelector('.im-app');
+      if (first) first.click();
+    }
+  });
 
-  // Render channel buttons below as direct links
-  const el = document.getElementById('channels');
-  el.innerHTML = channels.map(c => `
-    <a href="${c.url}" class="ch-btn ${c.class || ''}" target="_blank" rel="noopener">
-      <span class="icon">${c.icon}</span>
-      ${c.name}
-    </a>
+  // Render IM app buttons
+  const imAppsEl = document.getElementById('im-apps');
+  imAppsEl.innerHTML = imChannels.map(c => `
+    <div class="im-app" data-url="${c.url}" data-name="${c.name}">
+      ${c.icon} ${c.name}
+    </div>
   `).join('');
+
+  imAppsEl.querySelectorAll('.im-app').forEach(btn => {
+    btn.addEventListener('click', () => {
+      imAppsEl.querySelectorAll('.im-app').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      let url = btn.dataset.url;
+      if (url.startsWith('/') && baseUrl) url = baseUrl + url;
+      showQR(url, btn.dataset.name);
+    });
+  });
 }
 
 function showQR(url, label) {
@@ -113,13 +152,7 @@ function showQR(url, label) {
   const canvas = document.getElementById('qr-canvas');
   const labelEl = document.getElementById('qr-label');
 
-  // Make URL absolute for QR scanning
-  let fullUrl = url;
-  if (url.startsWith('/')) {
-    fullUrl = location.origin + url;
-  }
-
-  QRCode.toCanvas(canvas, fullUrl, {
+  QRCode.toCanvas(canvas, url, {
     width: 220,
     margin: 2,
     color: { dark: '#333', light: '#fff' },
@@ -127,38 +160,10 @@ function showQR(url, label) {
     if (err) console.error('QR error:', err);
   });
 
-  labelEl.textContent = `扫码联系客服 · Scan to connect`;
+  labelEl.textContent = `用 ${label} 扫描二维码`;
   section.style.display = 'block';
 }
 
-// Auto-detect platform — if opened inside an IM app, auto-redirect to that bot
-function detectAndRedirect() {
-  const ua = navigator.userAgent.toLowerCase();
-  let targetType = null;
-  if (ua.includes('micromessenger')) targetType = 'wechat';
-  else if (ua.includes('telegram')) targetType = 'telegram';
-  else if (ua.includes('line')) targetType = 'line';
-
-  if (!targetType) return;
-
-  // Fetch links and redirect to the matching channel
-  const endpoint = uid ? `/api/connect-links/${uid}` : '/api/connect-config';
-  fetch(endpoint).then(r => r.json()).then(data => {
-    const links = uid ? data.links : {};
-    const channels = uid ? null : data.channels;
-    let url = null;
-    if (links && links[targetType]) url = links[targetType].url;
-    if (channels) {
-      const ch = channels.find(c => c.type === targetType);
-      if (ch) url = ch.url;
-    }
-    if (url && !url.startsWith('/')) {
-      location.href = url;  // Redirect to the IM bot link
-    }
-  }).catch(() => {});
-}
-
-detectAndRedirect();
 init();
 </script>
 </body>

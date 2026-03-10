@@ -28,6 +28,7 @@ class DashboardAPI:
         port: int = 8081,
         host: str = "127.0.0.1",
         channels_config: dict | None = None,
+        base_url: str | None = None,
     ):
         self.db = db
         self.analytics = analytics
@@ -35,6 +36,7 @@ class DashboardAPI:
         self.port = port
         self.host = host
         self._channels_config = channels_config or {}
+        self._base_url = (base_url or "").rstrip("/")  # e.g. "http://192.168.1.100:8081"
         self._tg_bot_username: str | None = None  # resolved lazily
         self._ws_clients: list[web.WebSocketResponse] = []
         self._app = web.Application()
@@ -212,6 +214,14 @@ class DashboardAPI:
         summary = await self.analytics.summary()
         return web.json_response(summary)
 
+    def _resolve_base_url(self, request: web.Request) -> str:
+        """Return the external base URL for generating QR codes / links."""
+        if self._base_url:
+            return self._base_url
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        return f"{scheme}://{host}"
+
     async def _resolve_tg_bot_username(self) -> str | None:
         """Resolve Telegram bot username from token via getMe API (cached)."""
         if self._tg_bot_username is not None:
@@ -297,17 +307,12 @@ class DashboardAPI:
         session_id = request.query.get("session_id")
         await self._resolve_tg_bot_username()
         links = self._build_channel_links(uid=uid, session_id=session_id)
-
-        # Build the universal QR URL (one QR for all channels)
-        # In production, use the public base URL; for now, use request host
-        host = request.headers.get("X-Forwarded-Host", request.host)
-        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
-        universal_url = f"{scheme}://{host}/connect.html?uid={uid}"
+        base = self._resolve_base_url(request)
 
         return web.json_response({
             "uid": uid,
             "links": links,
-            "universal_url": universal_url,
+            "universal_url": f"{base}/connect.html?uid={uid}",
             "qr_page": f"/connect.html?uid={uid}",
         })
 
@@ -323,15 +328,12 @@ class DashboardAPI:
         session_id = request.match_info["session_id"]
         await self._resolve_tg_bot_username()
         links = self._build_channel_links(session_id=session_id)
-
-        host = request.headers.get("X-Forwarded-Host", request.host)
-        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
-        universal_url = f"{scheme}://{host}/connect.html?session_id={session_id}"
+        base = self._resolve_base_url(request)
 
         return web.json_response({
             "session_id": session_id,
             "links": links,
-            "universal_url": universal_url,
+            "universal_url": f"{base}/connect.html?session_id={session_id}",
             "qr_page": f"/connect.html?session_id={session_id}",
         })
 

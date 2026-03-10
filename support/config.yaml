@@ -6,10 +6,14 @@ channels:
   webchat:
     port: 8082
     path: /ws
-  # whatsapp:
-  #   phone_number_id: "YOUR_PHONE_NUMBER_ID"
-  #   access_token: "YOUR_ACCESS_TOKEN"
-  #   verify_token: "YOUR_VERIFY_TOKEN"
+  whatsapp:
+    mode: unofficial                    # unofficial = whatsapp-web.js, official = Meta Cloud API
+    bridge_url: "http://localhost:8084" # whatsapp-web.js bridge address
+    # 切换到官方 API 时改为:
+    # mode: official
+    # phone_number_id: "YOUR_PHONE_NUMBER_ID"
+    # access_token: "YOUR_ACCESS_TOKEN"
+    # verify_token: "YOUR_VERIFY_TOKEN"
 
 ai:
   backend: minimax
@@ -84,6 +88,7 @@ agents:
 
 dashboard:
   port: 8081
+  base_url: "http://192.168.199.179:8081"  # QR码用的外部地址
 
 database:
   path: ./data/support.db
