@@ -283,9 +283,16 @@ class DashboardAPI:
         await self._resolve_tg_bot_username()
         links = self._build_channel_links(uid)
 
+        # Build the universal QR URL (one QR for all channels)
+        # In production, use the public base URL; for now, use request host
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        universal_url = f"{scheme}://{host}/connect.html?uid={uid}"
+
         return web.json_response({
             "uid": uid,
             "links": links,
+            "universal_url": universal_url,
             "qr_page": f"/connect.html?uid={uid}",
         })
 

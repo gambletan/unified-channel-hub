@@ -30,7 +30,7 @@ h1 { font-size: 24px; margin-bottom: 8px; }
 <body>
 <div class="card">
   <h1>👋 需要帮助？</h1>
-  <p class="subtitle">选择您常用的聊天工具，扫码联系客服<br>Scan the QR code with your preferred app</p>
+  <p class="subtitle">扫码联系客服，自动跳转您的聊天工具<br>Scan to connect — auto-detects your app</p>
 
   <div id="uid-display"></div>
 
@@ -88,37 +88,18 @@ async function init() {
     return;
   }
 
-  // Render channel buttons
+  // Show the universal QR code (this page's own URL — one QR for all channels)
+  const universalUrl = location.href;
+  showQR(universalUrl, '任意聊天工具 / Any App');
+
+  // Render channel buttons below as direct links
   const el = document.getElementById('channels');
   el.innerHTML = channels.map(c => `
-    <a href="${c.url}" class="ch-btn ${c.class || ''}" target="_blank" rel="noopener"
-       data-url="${c.url}" data-name="${c.name}">
+    <a href="${c.url}" class="ch-btn ${c.class || ''}" target="_blank" rel="noopener">
       <span class="icon">${c.icon}</span>
       ${c.name}
     </a>
   `).join('');
-
-  // Click to show QR code
-  el.querySelectorAll('.ch-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const url = btn.dataset.url;
-      // For relative URLs (webchat), don't generate QR — just navigate
-      if (url.startsWith('/')) return;
-      e.preventDefault();
-      // Remove active class from others
-      el.querySelectorAll('.ch-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      showQR(url, btn.dataset.name);
-    });
-  });
-
-  // Auto-show QR for first non-webchat channel
-  const firstExternal = channels.find(c => !c.url.startsWith('/'));
-  if (firstExternal) {
-    showQR(firstExternal.url, firstExternal.name);
-    const firstBtn = el.querySelector(`[data-name="${firstExternal.name}"]`);
-    if (firstBtn) firstBtn.classList.add('active');
-  }
 }
 
 function showQR(url, label) {
@@ -140,25 +121,38 @@ function showQR(url, label) {
     if (err) console.error('QR error:', err);
   });
 
-  labelEl.textContent = `用 ${label} 扫码 · Scan with ${label}`;
+  labelEl.textContent = `扫码联系客服 · Scan to connect`;
   section.style.display = 'block';
 }
 
-// Auto-detect platform and redirect
-function detectPlatform() {
+// Auto-detect platform — if opened inside an IM app, auto-redirect to that bot
+function detectAndRedirect() {
   const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes('micromessenger')) return 'wechat';
-  if (ua.includes('telegram')) return 'telegram';
-  if (ua.includes('line')) return 'line';
-  return null;
+  let targetType = null;
+  if (ua.includes('micromessenger')) targetType = 'wechat';
+  else if (ua.includes('telegram')) targetType = 'telegram';
+  else if (ua.includes('line')) targetType = 'line';
+
+  if (!targetType) return;
+
+  // Fetch links and redirect to the matching channel
+  const endpoint = uid ? `/api/connect-links/${uid}` : '/api/connect-config';
+  fetch(endpoint).then(r => r.json()).then(data => {
+    const links = uid ? data.links : {};
+    const channels = uid ? null : data.channels;
+    let url = null;
+    if (links && links[targetType]) url = links[targetType].url;
+    if (channels) {
+      const ch = channels.find(c => c.type === targetType);
+      if (ch) url = ch.url;
+    }
+    if (url && !url.startsWith('/')) {
+      location.href = url;  // Redirect to the IM bot link
+    }
+  }).catch(() => {});
 }
 
-const platform = detectPlatform();
-if (platform) {
-  // Opened inside an IM app — could auto-redirect to that channel's bot
-  // For now, just highlight the matching channel
-}
-
+detectAndRedirect();
 init();
 </script>
 </body>
