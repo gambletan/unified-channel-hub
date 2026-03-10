@@ -57,6 +57,7 @@ class ChannelManager:
         text: str,
         *,
         reply_to_id: str | None = None,
+        thread_id: str | None = None,
         parse_mode: str | None = None,
     ) -> str | None:
         """Send a message to a specific channel + chat."""
@@ -68,6 +69,7 @@ class ChannelManager:
                 chat_id=chat_id,
                 text=text,
                 reply_to_id=reply_to_id,
+                thread_id=thread_id,
                 parse_mode=parse_mode,
             )
         )
@@ -133,6 +135,10 @@ class ChannelManager:
                     reply = await self._run_pipeline(msg)
                     if reply and msg.chat_id:
                         out = self._to_outbound(reply, msg)
+                        logger.info(
+                            "outbound chat_id=%s thread_id=%s",
+                            out.chat_id, out.thread_id,
+                        )
                         await adapter.send(out)
                 except Exception:
                     logger.exception(
@@ -181,4 +187,5 @@ class ChannelManager:
             chat_id=orig.chat_id or "",
             text=reply,
             reply_to_id=orig.id,
+            thread_id=orig.thread_id,
         )

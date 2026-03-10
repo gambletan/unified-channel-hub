@@ -113,6 +113,13 @@ CREATE TABLE IF NOT EXISTS analytics_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics_events(event_type, created_at);
+
+CREATE TABLE IF NOT EXISTS topic_mappings (
+    customer_chat_id TEXT PRIMARY KEY,
+    thread_id INTEGER NOT NULL,
+    user_lang TEXT DEFAULT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_topic_thread ON topic_mappings(thread_id);
 """
 
 

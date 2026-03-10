@@ -134,6 +134,8 @@ class TelegramAdapter(ChannelAdapter):
             raise RuntimeError("telegram not connected")
 
         kwargs: dict = {"chat_id": int(msg.chat_id), "text": msg.text}
+        if msg.thread_id:
+            kwargs["message_thread_id"] = int(msg.thread_id)
         if msg.parse_mode:
             kwargs["parse_mode"] = msg.parse_mode
         elif self._parse_mode:
@@ -239,6 +241,13 @@ class TelegramAdapter(ChannelAdapter):
     ) -> None:
         if not update.message or not update.message.text:
             return
+        logger.info(
+            "telegram _on_text: chat_id=%s thread=%s from=%s text=%s",
+            update.message.chat_id,
+            update.message.message_thread_id,
+            update.message.from_user.id if update.message.from_user else "?",
+            update.message.text[:50],
+        )
         msg = self._build_message(
             update,
             MessageContent(type=ContentType.TEXT, text=update.message.text),

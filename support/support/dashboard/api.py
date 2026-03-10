@@ -173,6 +173,8 @@ class DashboardAPI:
             return web.json_response({"error": "not found"}, status=404)
 
         await self.db.update_ticket_status(ticket_id, TicketStatus.RESOLVED)
+        if ticket.assigned_agent_id:
+            await self.db.update_agent_load(ticket.assigned_agent_id, -1)
         await self.db.log_event("resolved", ticket_id=ticket_id)
 
         if self.send_fn:
@@ -256,5 +258,8 @@ class DashboardAPI:
             async for _ in ws:
                 pass  # We only push, don't read
         finally:
-            self._ws_clients.remove(ws)
+            try:
+                self._ws_clients.remove(ws)
+            except ValueError:
+                pass
         return ws

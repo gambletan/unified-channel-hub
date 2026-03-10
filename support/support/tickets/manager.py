@@ -79,8 +79,10 @@ class TicketMiddleware(Middleware):
                 channel=channel,
             ))
 
-            # Log first response time
-            if ticket.created_at == ticket.updated_at:
+            # Log first response time (check if first_response event already exists)
+            messages = await self.db.get_messages(ticket.id)
+            ai_or_agent_count = sum(1 for m in messages if m.role in ("ai", "agent"))
+            if ai_or_agent_count <= 1:  # This is the first reply
                 elapsed_ms = int(
                     (datetime.now(timezone.utc) - ticket.created_at).total_seconds() * 1000
                 )

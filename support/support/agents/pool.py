@@ -23,6 +23,10 @@ class AgentReplyMiddleware(Middleware):
         self.send_fn = send_fn  # manager.send reference
 
     async def process(self, msg: UnifiedMessage, next_handler: Handler) -> Any:
+        # Skip if TopicBridge is handling agent routing
+        if (msg.metadata or {}).get("topic_bridge"):
+            return await next_handler(msg)
+
         # Check if sender is a registered agent
         agent = await self.db.find_agent_by_chat(msg.channel, msg.chat_id or "")
         if not agent:

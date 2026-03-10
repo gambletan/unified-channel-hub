@@ -1,0 +1,61 @@
+# unified-support — 客服系统配置
+
+channels:
+  telegram:
+    token: "7968160842:AAHn1kzmhoFWx7PEtOTKpqZuY4SVVNWorGM"
+
+ai:
+  backend: minimax
+  api_key: "sk-cp-zO8PEgYPkp7dZHKh77ebQWFj5GZJ2sVWiUbrC3cR7BZonhBv1_PISAuuyItE5urr1Cd3kReK7fQFk0HrHoGoDjylNgjOL1okJgSEy2cm1AbUw6cI_WGu5Ps"
+  model: MiniMax-Text-01
+  temperature: 0.3
+  system_prompt: |
+    你是一个专业、友好的客服助手。
+    请根据知识库内容回答用户问题。
+    回复要简洁、专业、有礼貌。
+    用用户使用的语言回复（中文/英文）。
+    如果无法确定答案，主动提出转接人工客服。
+
+    {kb_context}
+
+  # Task → backend routing (all default to primary backend above)
+  # Add extra backends here if needed:
+  # backends:
+  #   deepseek:
+  #     api_key: sk-yyy
+  #     model: deepseek-chat
+  # routing:
+  #   translate: minimax
+  #   detect_lang: minimax
+  #   ai_reply: deepseek
+  #   summarize: deepseek
+
+knowledge:
+  path: ./knowledge
+  reindex_on_start: true
+
+topic_bridge:
+  group_chat_id: -1003828541886
+  agent_ids: ["1922559342"]
+  default_lang: zh          # 客服默认语言
+  reply_timeout: 180        # 秒，超时未回复提醒
+
+escalation:
+  max_ai_turns: 8
+
+rate_limit:
+  max_messages: 30
+  window_seconds: 60
+
+agents:
+  - id: alvin
+    name: Alvin
+    channel: telegram
+    chat_id: "1922559342"
+    skills: [general]
+
+dashboard:
+  port: 8081
+
+database:
+  path: ./data/support.db

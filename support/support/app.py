@@ -19,6 +19,7 @@ from unified_channel import (
 )
 
 from .ai.backends import create_backend
+from .ai.model_router import ModelRouter
 from .ai.rag import KnowledgeBase
 from .ai.router import AIRouter
 from .analytics.metrics import Analytics
@@ -29,6 +30,7 @@ from .tickets.escalation import EscalationMiddleware
 from .tickets.manager import TicketMiddleware
 from .agents.pool import AgentReplyMiddleware
 from .tickets.identity import IdentityMiddleware
+from .tickets.topic_bridge import TopicBridgeMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +65,13 @@ async def run(config_path: str = "config.yaml") -> None:
     if config.get("knowledge", {}).get("reindex_on_start", True):
         await kb.reindex()
 
-    # LLM backend
+    # Model router (task-based LLM routing)
     ai_config = config.get("ai", {})
+    model_router = ModelRouter.from_config(ai_config)
+    for line in model_router.summary():
+        logger.info("ModelRouter: %s", line)
+
+    # LLM backend (for AI router, uses ai_reply task)
     llm = create_backend(
         backend_name=ai_config.get("backend", "openai"),
         api_key=ai_config.get("api_key"),
@@ -108,6 +115,25 @@ async def run(config_path: str = "config.yaml") -> None:
         max_messages=config.get("rate_limit", {}).get("max_messages", 30),
         window_seconds=config.get("rate_limit", {}).get("window_seconds", 60),
     ))
+
+    # Topic bridge: DMs ↔ agent group forum topics
+    tb_config = config.get("topic_bridge", {})
+    if tb_config.get("group_chat_id"):
+        from unified_channel.adapters.telegram import TelegramAdapter
+        tg_adapter = manager._channels.get("telegram")
+        if isinstance(tg_adapter, TelegramAdapter):
+            manager.add_middleware(TopicBridgeMiddleware(
+                db=db,
+                tg_adapter=tg_adapter,
+                group_chat_id=int(tb_config["group_chat_id"]),
+                router=model_router,
+                agent_ids=set(str(i) for i in tb_config.get("agent_ids", [])),
+                default_lang=tb_config.get("default_lang", "zh"),
+                reply_timeout=tb_config.get("reply_timeout", 180),
+                sensitive_words=tb_config.get("sensitive_words"),
+            ))
+            logger.info("Topic bridge enabled for group %s", tb_config["group_chat_id"])
+
     manager.add_middleware(IdentityMiddleware(db))  # Bind IM users to platform users
     manager.add_middleware(TicketMiddleware(db))
     manager.add_middleware(ConversationMemory(max_turns=20))
@@ -132,6 +158,7 @@ async def run(config_path: str = "config.yaml") -> None:
         analytics=analytics,
         send_fn=manager.send,
         port=dashboard_config.get("port", 8081),
+        host=dashboard_config.get("host", "0.0.0.0"),
     )
     await dashboard.start()
 
