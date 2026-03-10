@@ -1,7 +1,7 @@
 {
   "name": "unified-channel",
-  "version": "0.1.0",
-  "description": "Unified message middleware for Node.js — 19 channels, 1 API",
+  "version": "0.2.0",
+  "description": "Communication layer for personal AI assistants — IM, Email, Voice, Calendar, IoT in one unified API",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
