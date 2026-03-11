@@ -35,9 +35,8 @@ class EscalationMiddleware(Middleware):
         if ticket.status == TicketStatus.ASSIGNED:
             return await next_handler(msg)
 
-        # Count AI turns for this ticket
-        messages = await self.db.get_messages(ticket.id)
-        ai_turns = sum(1 for m in messages if m.role == "ai")
+        # Count AI turns for this ticket (efficient COUNT query)
+        ai_turns = await self.db.count_messages_by_role(ticket.id, "ai")
 
         # Check escalation triggers
         if self.ai_router.should_escalate(text, ai_turns):

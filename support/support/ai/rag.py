@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from ..models import KBArticle
 
 logger = logging.getLogger(__name__)
 
+# KB search cache TTL in seconds
+_KB_CACHE_TTL = 300
+
 
 class KnowledgeBase:
     """Index markdown files and search them for RAG."""
@@ -18,9 +22,12 @@ class KnowledgeBase:
     def __init__(self, db: Database, knowledge_dir: str | Path = "knowledge"):
         self.db = db
         self.knowledge_dir = Path(knowledge_dir)
+        # Search result cache: normalized_query -> (results, timestamp)
+        self._cache: dict[str, tuple[list[KBArticle], float]] = {}
 
     async def reindex(self) -> int:
         """Re-index all markdown files in the knowledge directory."""
+        self._cache.clear()  # Invalidate cache on reindex
         await self.db.clear_kb()
         count = 0
         if not self.knowledge_dir.exists():
@@ -56,15 +63,44 @@ class KnowledgeBase:
         logger.info("Indexed %d knowledge base articles", count)
         return count
 
+    def _normalize_query(self, query: str) -> str:
+        """Normalize query for cache key (lowercase, sorted tokens)."""
+        tokens = sorted(set(query.lower().split()))
+        return " ".join(tokens)
+
     async def search(self, query: str, top_k: int = 3) -> list[KBArticle]:
-        """Search the knowledge base. Returns empty list if no match."""
+        """Search the knowledge base with caching. Returns empty list if no match."""
         if not query.strip():
             return []
+
+        # Check cache
+        cache_key = self._normalize_query(query)
+        cached = self._cache.get(cache_key)
+        if cached:
+            results, ts = cached
+            if time.monotonic() - ts < _KB_CACHE_TTL:
+                logger.debug("KB cache hit: %s (%d results)", cache_key[:30], len(results))
+                return results
+            del self._cache[cache_key]
+
         try:
-            return await self.db.search_kb(query, top_k)
+            results = await self.db.search_kb(query, top_k)
         except Exception as e:
             logger.warning("KB search error: %s", e)
             return []
+
+        # Cache results
+        self._cache[cache_key] = (results, time.monotonic())
+
+        # Evict old entries if cache too large
+        if len(self._cache) > 200:
+            now = time.monotonic()
+            self._cache = {
+                k: v for k, v in self._cache.items()
+                if now - v[1] < _KB_CACHE_TTL
+            }
+
+        return results
 
     def format_context(self, articles: list[KBArticle]) -> str:
         """Format KB articles as context for the LLM prompt."""

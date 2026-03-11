@@ -86,6 +86,7 @@ async def run(config_path: str = "config.yaml") -> None:
         system_prompt=ai_config.get("system_prompt"),
         max_ai_turns=config.get("escalation", {}).get("max_ai_turns", 8),
         temperature=ai_config.get("temperature", 0.3),
+        max_tokens=ai_config.get("max_tokens", 512),
     )
 
     # Channel manager (use unified-channel's load_config or manual setup)
@@ -177,17 +178,64 @@ async def run(config_path: str = "config.yaml") -> None:
             parts = [f"User is LOGGED IN (platform user ID: {platform_uid})"]
             if erp_client:
                 try:
-                    info = await erp_client.get_user_info(platform_uid)
+                    # Parallel ERP calls with 3s timeout
+                    info_task = asyncio.wait_for(
+                        erp_client.get_user_info(platform_uid), timeout=3.0
+                    )
+                    orders_task = asyncio.wait_for(
+                        erp_client.get_orders(user_id=platform_uid, page_size=5),
+                        timeout=3.0,
+                    )
+                    results = await asyncio.gather(
+                        info_task, orders_task, return_exceptions=True
+                    )
+                    info, orders = results
+                    if isinstance(info, Exception):
+                        logger.warning("ERP user info timeout/error: %s", info)
+                        info = None
+                    if isinstance(orders, Exception):
+                        logger.warning("ERP orders timeout/error: %s", orders)
+                        orders = None
                     if info:
                         parts.append(info.summary_for_agent())
-                    orders = await erp_client.get_orders(user_id=platform_uid, page_size=5)
                     if orders and orders.orders:
                         parts.append(orders.summary_for_agent())
                 except Exception as e:
                     logger.warning("ERP context fetch failed: %s", e)
             user_context = "\n\n".join(parts)
+
+        # Build streaming callback for webchat (sends chunks in real-time)
+        on_chunk = None
+        _webchat_stream = None  # (adapter, session_id, msg_id) tuple
+        if msg.channel == "webchat":
+            from unified_channel.adapters.webchat import WebChatAdapter
+            _wc_adapter = manager._channels.get("webchat")
+            if isinstance(_wc_adapter, WebChatAdapter):
+                import uuid as _uuid
+                _stream_msg_id = _uuid.uuid4().hex[:8]
+                _session_id = msg.chat_id
+                _webchat_stream = (_wc_adapter, _session_id, _stream_msg_id)
+
+                async def on_chunk(chunk: str, full_text: str) -> None:
+                    await _wc_adapter.send_stream_chunk(
+                        _session_id, chunk, full_text, _stream_msg_id
+                    )
+
         user_lang = (msg.metadata or {}).get("user_lang")
-        return await ai_router.generate_reply(msg.content.text or "", formatted, user_context=user_context, user_lang=user_lang)
+        reply = await ai_router.generate_reply(
+            msg.content.text or "", formatted,
+            user_context=user_context, user_lang=user_lang,
+            on_chunk=on_chunk,
+        )
+
+        # For webchat streaming: mark metadata so ChannelManager skips
+        # the duplicate send, but TicketMiddleware still records the reply.
+        if _webchat_stream:
+            wc_adapter, wc_sid, wc_mid = _webchat_stream
+            await wc_adapter.send_stream_end(wc_sid, reply, wc_mid)
+            msg.metadata["_streamed"] = True
+
+        return reply
 
     # Dashboard
     dashboard_config = config.get("dashboard", {})

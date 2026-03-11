@@ -31,6 +31,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .input-area input:focus { border-color: #4a4aff; }
 .input-area button { padding: 10px 20px; background: #4a4aff; color: white; border: none; border-radius: 20px; cursor: pointer; font-size: 14px; }
 .input-area button:disabled { background: #ccc; }
+.typing { animation: blink 0.7s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -59,7 +61,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 </div>
 
 <script>
-const WS_URL = 'ws://' + location.hostname + ':8082/ws'
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'
 let ws = null
 let sessionId = null
 let isAuthenticated = false
@@ -114,6 +116,12 @@ function connect() {
         document.getElementById('loginBar').style.display = 'none'
       }
       addMessage('system', data.text)
+    } else if (data.type === 'stream') {
+      // Streaming: update or create the streaming message bubble
+      updateStreamMessage(data.id, data.text)
+    } else if (data.type === 'stream_end') {
+      // Finalize the streaming message
+      finalizeStreamMessage(data.id, data.text)
     } else if (data.type === 'text') {
       addMessage('agent', data.text)
     }
@@ -157,9 +165,37 @@ function addMessage(type, text) {
   const msg = document.createElement('div')
   msg.className = 'msg ' + type
   const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  msg.innerHTML = text + '<div class="time">' + time + '</div>'
+  msg.innerHTML = escapeHtml(text) + '<div class="time">' + time + '</div>'
   div.appendChild(msg)
   div.scrollTop = div.scrollHeight
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div')
+  d.textContent = str
+  return d.innerHTML
+}
+
+function updateStreamMessage(msgId, fullText) {
+  const div = document.getElementById('messages')
+  let el = document.getElementById('stream-' + msgId)
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'stream-' + msgId
+    el.className = 'msg agent'
+    div.appendChild(el)
+  }
+  el.innerHTML = escapeHtml(fullText) + '<span class="typing">▍</span>'
+  div.scrollTop = div.scrollHeight
+}
+
+function finalizeStreamMessage(msgId, fullText) {
+  const el = document.getElementById('stream-' + msgId)
+  if (el) {
+    const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    el.innerHTML = escapeHtml(fullText) + '<div class="time">' + time + '</div>'
+    el.removeAttribute('id') // no longer streaming
+  }
 }
 
 function setStatus(cls, text) {

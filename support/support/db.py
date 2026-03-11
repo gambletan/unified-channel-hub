@@ -145,11 +145,14 @@ class Database:
     async def connect(self) -> None:
         self._db = await aiosqlite.connect(self.path)
         self._db.row_factory = aiosqlite.Row
+        # WAL mode for better concurrent read/write performance
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.executescript(SCHEMA)
         # Migrations for existing DBs
         await self._run_migrations()
         await self._db.commit()
-        logger.info("Database connected: %s", self.path)
+        logger.info("Database connected: %s (WAL mode)", self.path)
 
     async def _run_migrations(self) -> None:
         """Add columns that may not exist in older databases."""
@@ -301,15 +304,39 @@ class Database:
 
     # ── Messages ──
 
-    async def add_message(self, msg: TicketMessage) -> TicketMessage:
+    async def add_message(self, msg: TicketMessage, *, commit: bool = True) -> TicketMessage:
         async with self.db.execute(
             """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, from_id, to_id, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, msg.from_id, msg.to_id, _iso(msg.created_at)),
         ) as cur:
             msg.id = cur.lastrowid or 0
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
         return msg
+
+    async def commit(self) -> None:
+        """Explicit commit — use after batched no-commit writes."""
+        await self.db.commit()
+
+    async def count_messages_by_role(self, ticket_id: str, role: str) -> int:
+        """Count messages for a ticket filtered by role (efficient, no row loading)."""
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM ticket_messages WHERE ticket_id = ? AND role = ?",
+            (ticket_id, role),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def count_messages_by_roles(self, ticket_id: str, roles: list[str]) -> int:
+        """Count messages for a ticket matching any of the given roles."""
+        placeholders = ",".join("?" for _ in roles)
+        async with self.db.execute(
+            f"SELECT COUNT(*) FROM ticket_messages WHERE ticket_id = ? AND role IN ({placeholders})",
+            (ticket_id, *roles),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
 
     async def get_messages(self, ticket_id: str, limit: int = 100) -> list[TicketMessage]:
         async with self.db.execute(
@@ -442,7 +469,7 @@ class Database:
     async def log_event(
         self, event_type: str, ticket_id: str | None = None,
         agent_id: str | None = None, value_ms: int | None = None,
-        metadata: dict | None = None,
+        metadata: dict | None = None, *, commit: bool = True,
     ) -> None:
         await self.db.execute(
             """INSERT INTO analytics_events (event_type, ticket_id, agent_id, value_ms, metadata, created_at)
@@ -450,7 +477,8 @@ class Database:
             (event_type, ticket_id, agent_id, value_ms,
              json.dumps(metadata or {}), _iso(datetime.now(timezone.utc))),
         )
-        await self.db.commit()
+        if commit:
+            await self.db.commit()
 
     # ── CSAT ──
 

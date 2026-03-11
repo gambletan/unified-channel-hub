@@ -152,7 +152,7 @@ document.querySelectorAll('.filters button').forEach(btn => {
 });
 
 // WebSocket for live updates
-const ws = new WebSocket(`ws://${location.host}/ws`);
+const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
 ws.onmessage = () => { loadTickets(); loadAnalytics(); if (currentTicket) selectTicket(currentTicket); };
 
 // Enter to send
