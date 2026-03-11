@@ -169,19 +169,19 @@ async def run(config_path: str = "config.yaml") -> None:
         # Inject ERP user/order info for authenticated users
         user_context = None
         platform_uid = (msg.metadata or {}).get("platform_user_id")
-        if platform_uid and erp_client:
-            try:
-                parts = []
-                info = await erp_client.get_user_info(platform_uid)
-                if info:
-                    parts.append(info.summary_for_agent())
-                orders = await erp_client.get_orders(user_id=platform_uid, page_size=5)
-                if orders and orders.orders:
-                    parts.append(orders.summary_for_agent())
-                if parts:
-                    user_context = "\n\n".join(parts)
-            except Exception as e:
-                logger.warning("ERP context fetch failed: %s", e)
+        if platform_uid:
+            parts = [f"User is LOGGED IN (platform user ID: {platform_uid})"]
+            if erp_client:
+                try:
+                    info = await erp_client.get_user_info(platform_uid)
+                    if info:
+                        parts.append(info.summary_for_agent())
+                    orders = await erp_client.get_orders(user_id=platform_uid, page_size=5)
+                    if orders and orders.orders:
+                        parts.append(orders.summary_for_agent())
+                except Exception as e:
+                    logger.warning("ERP context fetch failed: %s", e)
+            user_context = "\n\n".join(parts)
         user_lang = (msg.metadata or {}).get("user_lang")
         return await ai_router.generate_reply(msg.content.text or "", formatted, user_context=user_context, user_lang=user_lang)
 

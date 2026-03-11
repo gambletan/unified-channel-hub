@@ -22,6 +22,10 @@ java/target/
 .vscode/
 *.iml
 
+# Support
+support/config.yaml
+support/data/
+
 # OS
 .DS_Store
 

@@ -1,68 +1,73 @@
 # unified-support configuration
-# Copy to config.yaml and fill in your values
+# Copy to config.yaml and fill in your credentials
 
-# Messaging channels — add any combination
 channels:
   telegram:
     token: "${TELEGRAM_BOT_TOKEN}"
-  # discord:
-  #   token: "${DISCORD_BOT_TOKEN}"
-  # slack:
-  #   bot_token: "${SLACK_BOT_TOKEN}"
-  #   app_token: "${SLACK_APP_TOKEN}"
-  # whatsapp:
-  #   phone_number_id: "${WHATSAPP_PHONE_ID}"
-  #   access_token: "${WHATSAPP_ACCESS_TOKEN}"
-  #   verify_token: "${WHATSAPP_VERIFY_TOKEN}"
-  # wechat:
-  #   corp_id: "${WECHAT_CORP_ID}"
-  #   agent_id: "${WECHAT_AGENT_ID}"
-  #   secret: "${WECHAT_SECRET}"
-  #   token: "${WECHAT_TOKEN}"
-  #   encoding_aes_key: "${WECHAT_AES_KEY}"
+  webchat:
+    port: 8082
+    path: /ws
+  whatsapp:
+    mode: unofficial
+    bridge_url: "http://localhost:8084"
 
-# AI backend
 ai:
-  backend: deepseek          # claude | deepseek | qwen | glm | minimax | openai
+  backend: minimax
   api_key: "${AI_API_KEY}"
-  model: deepseek-chat       # or claude-sonnet-4-20250514, qwen-turbo, gpt-4o-mini
-  # base_url: null           # Override for custom endpoints
+  model: MiniMax-Text-01
   temperature: 0.3
   system_prompt: |
-    You are a helpful customer support agent.
-    Answer based on the knowledge base context provided.
-    Be concise, friendly, and professional.
-    Reply in the same language the customer uses.
+    You are a professional, friendly customer support agent.
+    Answer based on knowledge base and customer info provided.
+    Be concise, professional, and polite.
+
+    IMPORTANT: Always reply in the SAME language the customer uses.
+
+    When the customer asks about orders, shipping, or delivery:
+    - If Customer Info is available, use it to answer directly
+    - Order status: 0=Pending Payment, 1=Paid, 2=Processing, 3=Shipped, 4=Completed, 5=Cancelled
+    - Never make up shipping info
+
     If you cannot answer confidently, offer to connect them with a human agent.
+
+    SECURITY RULES for non-logged-in users:
+    - If no Customer Info is provided, the user is NOT logged in
+    - Do NOT reveal personal info to non-logged-in users
+    - Ask them to log in for full order details
 
     {kb_context}
 
-# Knowledge base (FAQ/docs the AI searches before answering)
 knowledge:
   path: ./knowledge
   reindex_on_start: true
 
-# Escalation settings
-escalation:
-  max_ai_turns: 8            # Escalate after N AI turns without resolution
+topic_bridge:
+  group_chat_id: -1001234567890         # Telegram forum group ID
+  agent_ids: ["123456789", "987654321"] # Telegram user IDs of CS agents
+  default_lang: zh
+  reply_timeout: 180
 
-# Rate limiting
+erp:
+  base_url: "${ERP_BASE_URL}"
+  api_key: "${ERP_API_KEY}"
+
+escalation:
+  max_ai_turns: 8
+
 rate_limit:
   max_messages: 30
   window_seconds: 60
 
-# Human agents (receive escalated tickets)
 agents:
-  - id: agent-1
-    name: Support Team
-    channel: telegram         # Agent's IM channel
-    chat_id: "${AGENT_CHAT_ID}"
+  - id: agent1
+    name: Agent Name
+    channel: telegram
+    chat_id: "123456789"
     skills: [general]
 
-# Dashboard
 dashboard:
   port: 8081
+  base_url: "http://localhost:8081"
 
-# Database
 database:
   path: ./data/support.db
