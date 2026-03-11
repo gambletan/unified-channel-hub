@@ -40,12 +40,13 @@ class EscalationMiddleware(Middleware):
 
         # Check escalation triggers
         if self.ai_router.should_escalate(text, ai_turns):
-            return await self._escalate(msg, ticket)
+            user_lang = (msg.metadata or {}).get("user_lang")
+            return await self._escalate(msg, ticket, user_lang=user_lang)
 
         # Otherwise, proceed to AI handler
         return await next_handler(msg)
 
-    async def _escalate(self, msg: UnifiedMessage, ticket: Any) -> str:
+    async def _escalate(self, msg: UnifiedMessage, ticket: Any, user_lang: str | None = None) -> str:
         """Escalate ticket to a human agent."""
         agent = await self.db.get_available_agent()
 
@@ -69,16 +70,26 @@ class EscalationMiddleware(Middleware):
                 await self.send_fn(agent.channel, agent.chat_id, notify)
 
             logger.info("Ticket %s escalated to agent %s", ticket.id, agent.name)
-            return (
-                "I'm connecting you with a human agent. "
-                f"{agent.name} will be with you shortly. 🙋"
-            )
+            return self._escalation_msg(agent.name, available=True, lang=user_lang)
         else:
             await self.db.update_ticket_status(ticket.id, TicketStatus.ESCALATED)
             await self.db.log_event("escalated", ticket_id=ticket.id)
             logger.info("Ticket %s escalated (no agent available)", ticket.id)
+            return self._escalation_msg(None, available=False, lang=user_lang)
+
+    @staticmethod
+    def _escalation_msg(agent_name: str | None, *, available: bool, lang: str | None) -> str:
+        if lang and lang.startswith("zh"):
+            if available:
+                return f"正在为您转接人工客服，{agent_name} 马上为您服务 🙋"
+            return "当前客服繁忙，您的请求已排队，稍后会有专人联系您，请耐心等待 🙏"
+        if available:
             return (
-                "All our agents are currently busy. "
-                "Your request has been queued and someone will respond soon. "
-                "Thank you for your patience. 🙏"
+                "I'm connecting you with a human agent. "
+                f"{agent_name} will be with you shortly. 🙋"
             )
+        return (
+            "All our agents are currently busy. "
+            "Your request has been queued and someone will respond soon. "
+            "Thank you for your patience. 🙏"
+        )

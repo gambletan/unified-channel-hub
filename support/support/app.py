@@ -228,12 +228,21 @@ async def run(config_path: str = "config.yaml") -> None:
             on_chunk=on_chunk,
         )
 
-        # For webchat streaming: mark metadata so ChannelManager skips
-        # the duplicate send, but TicketMiddleware still records the reply.
+        # Send stream_end for webchat streaming clients.
+        # Normal text send still happens via ChannelManager for backward
+        # compatibility with clients that don't support streaming.
         if _webchat_stream:
             wc_adapter, wc_sid, wc_mid = _webchat_stream
             await wc_adapter.send_stream_end(wc_sid, reply, wc_mid)
-            msg.metadata["_streamed"] = True
+            # Return OutboundMessage with same msg_id so text message uses same id
+            # This lets the frontend deduplicate stream vs text messages
+            from unified_channel import OutboundMessage
+            return OutboundMessage(
+                chat_id=msg.chat_id or "",
+                text=reply,
+                reply_to_id=msg.id,
+                metadata={"msg_id": wc_mid},
+            )
 
         return reply
 
