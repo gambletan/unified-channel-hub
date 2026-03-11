@@ -98,7 +98,11 @@ class TelegramAdapter(ChannelAdapter):
         # Catch-all command handler (any /xxx)
         self._app.add_handler(MessageHandler(filters.COMMAND, self._on_command))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text))
-        self._app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, self._on_media))
+        self._app.add_handler(MessageHandler(
+            filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO
+            | filters.VIDEO | filters.VIDEO_NOTE | filters.Sticker.ALL,
+            self._on_media,
+        ))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
 
         # Error handler to catch unhandled errors
@@ -275,13 +279,55 @@ class TelegramAdapter(ChannelAdapter):
     ) -> None:
         if not update.message:
             return
-        caption = update.message.caption or ""
+        m = update.message
+        caption = m.caption or ""
+
+        # Detect media type and get file_id for URL resolution
+        file_id: str | None = None
+        if m.voice:
+            media_type = "voice"
+            file_id = m.voice.file_id
+        elif m.audio:
+            media_type = "audio"
+            file_id = m.audio.file_id
+        elif m.video:
+            media_type = "video"
+            file_id = m.video.file_id
+        elif m.video_note:
+            media_type = "video_note"
+            file_id = m.video_note.file_id
+        elif m.sticker:
+            media_type = "sticker"
+            file_id = m.sticker.file_id
+        elif m.photo:
+            media_type = "photo"
+            file_id = m.photo[-1].file_id  # largest resolution
+        elif m.document:
+            media_type = "document"
+            file_id = m.document.file_id
+        else:
+            media_type = "unknown"
+
+        # Resolve file URL so downstream middleware can fetch it
+        media_url: str | None = None
+        if file_id:
+            try:
+                f = await context.bot.get_file(file_id)
+                media_url = f.file_path  # full HTTPS URL
+            except Exception as exc:
+                logger.warning("telegram: failed to get file URL for %s: %s", media_type, exc)
+
+        logger.info(
+            "telegram _on_media: chat_id=%s type=%s file_id=%s",
+            m.chat_id, media_type, file_id and file_id[:20],
+        )
         msg = self._build_message(
             update,
             MessageContent(
                 type=ContentType.MEDIA,
                 text=caption,
-                media_type="photo" if update.message.photo else "document",
+                media_type=media_type,
+                media_url=media_url,
             ),
         )
         await self._queue.put(msg)
