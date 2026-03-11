@@ -13,6 +13,8 @@ Based on the original customer_service_poc.py design:
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import logging
 import re
 from typing import Any
@@ -114,7 +116,7 @@ class TopicBridgeMiddleware(Middleware):
         if msg.content.type == ContentType.CALLBACK and msg.content.callback_data:
             return await self._handle_callback(msg)
 
-        if not text.strip():
+        if not text.strip() and msg.content.type != ContentType.MEDIA:
             return await next_handler(msg)
 
         # --- Cross-channel session link (e.g. Telegram user scanned webchat QR) ---
@@ -412,25 +414,30 @@ class TopicBridgeMiddleware(Middleware):
             if translated and translated != text:
                 display_text = f"{text}\n\n🌐 _{translated}_"
 
-        # Forward to topic
-        try:
-            await self.bot.send_message(
-                chat_id=self.group_chat_id,
-                message_thread_id=topic_id,
-                text=f"👤 {display_text}",
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error("Failed to forward to topic %s: %s", topic_id, e)
-            # Retry without markdown
+        # Forward to topic — media messages get forwarded directly,
+        # text messages are sent with translation
+        is_media = msg.content.type == ContentType.MEDIA
+        if is_media:
+            await self._forward_media_to_topic(msg, topic_id, text, display_text)
+        else:
             try:
                 await self.bot.send_message(
                     chat_id=self.group_chat_id,
                     message_thread_id=topic_id,
-                    text=f"👤 {text}",
+                    text=f"👤 {display_text}",
+                    parse_mode="Markdown",
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Failed to forward to topic %s: %s", topic_id, e)
+                # Retry without markdown
+                try:
+                    await self.bot.send_message(
+                        chat_id=self.group_chat_id,
+                        message_thread_id=topic_id,
+                        text=f"👤 {text}",
+                    )
+                except Exception:
+                    pass
 
         # Start reply timeout
         self._start_timer(chat_id, topic_id)
@@ -485,6 +492,112 @@ class TopicBridgeMiddleware(Middleware):
                     logger.error("Failed to forward AI reply to topic: %s", e)
 
         return result
+
+    # =========================================================================
+    # Media Forwarding (all channels)
+    # =========================================================================
+
+    async def _forward_media_to_topic(
+        self, msg: UnifiedMessage, topic_id: int, text: str, display_text: str,
+    ) -> None:
+        """Forward media from any channel to the agent group topic.
+
+        - Telegram: native forward (preserves original message)
+        - Webchat/other: decode base64 media_url and send via bot API
+        """
+        media_type = msg.content.media_type or "unknown"
+        media_label = f"👤 [{media_type}]"
+        if text:
+            media_label += f" {display_text}"
+
+        # --- Telegram native forward ---
+        tg_msg = None
+        if msg.raw and hasattr(msg.raw, "message"):
+            tg_msg = msg.raw.message
+        if tg_msg and hasattr(tg_msg, "forward"):
+            try:
+                await tg_msg.forward(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                )
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    text=media_label,
+                )
+                return
+            except Exception as e:
+                logger.warning("Telegram forward failed, falling back to send: %s", e)
+
+        # --- Non-Telegram (webchat, etc.): decode media and send via bot ---
+        media_url = msg.content.media_url
+        if not media_url:
+            # No media data, just send label
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=topic_id,
+                text=media_label,
+            )
+            return
+
+        try:
+            file_bytes = self._decode_media_url(media_url)
+            buf = io.BytesIO(file_bytes)
+            caption = text or None
+            kwargs = {
+                "chat_id": self.group_chat_id,
+                "message_thread_id": topic_id,
+                "caption": caption,
+            }
+
+            if media_type in ("voice", "audio"):
+                buf.name = "voice.ogg"
+                await self.bot.send_voice(**kwargs, voice=buf)
+            elif media_type == "video":
+                buf.name = "video.mp4"
+                await self.bot.send_video(**kwargs, video=buf)
+            elif media_type in ("photo", "image"):
+                buf.name = "photo.jpg"
+                await self.bot.send_photo(**kwargs, photo=buf)
+            elif media_type == "sticker":
+                buf.name = "sticker.webp"
+                await self.bot.send_sticker(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    sticker=buf,
+                )
+            else:
+                # document / unknown — send as file
+                buf.name = f"file.{media_type}" if media_type != "unknown" else "file.bin"
+                await self.bot.send_document(**kwargs, document=buf)
+
+            # Also send text label
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=topic_id,
+                text=media_label,
+            )
+        except Exception as e:
+            logger.error("Failed to send media to topic %s: %s", topic_id, e, exc_info=True)
+            # Fallback: at least send the label
+            try:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    text=f"{media_label} (media send failed)",
+                )
+            except Exception:
+                pass
+
+    @staticmethod
+    def _decode_media_url(media_url: str) -> bytes:
+        """Decode base64 data URI or raw base64 string to bytes."""
+        if media_url.startswith("data:"):
+            # data:audio/webm;base64,AAAA...
+            _, encoded = media_url.split(",", 1)
+        else:
+            encoded = media_url
+        return base64.b64decode(encoded)
 
     # =========================================================================
     # Agent Topic → Customer DM
