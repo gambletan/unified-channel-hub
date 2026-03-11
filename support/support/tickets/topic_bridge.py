@@ -547,6 +547,8 @@ class TopicBridgeMiddleware(Middleware):
                     sender_id=sender_id,
                     content=text,
                     channel=customer_channel,
+                    from_id=sender_id,
+                    to_id=ticket.customer_id,
                 ))
 
             await self.bot.send_message(
@@ -907,9 +909,26 @@ class TopicBridgeMiddleware(Middleware):
             return thread_id
 
         try:
+            # Determine topic icon color by user type:
+            #   Guest (anonymous) → blue, Registered → yellow, VIP → red
+            _TOPIC_COLOR_GUEST = 7322096       # blue
+            _TOPIC_COLOR_REGISTERED = 16766590  # yellow
+            _TOPIC_COLOR_VIP = 16478047         # red
+            icon_color = _TOPIC_COLOR_GUEST
+            erp_info = None
+            if not self._is_guest(customer_chat_id):
+                erp_info = await self._fetch_erp_user_info(customer_chat_id)
+                if erp_info:
+                    # ERP found → registered; check user_level for VIP
+                    icon_color = _TOPIC_COLOR_REGISTERED
+                    user_info = await self._get_erp_user_obj(customer_chat_id)
+                    if user_info and user_info.user_level >= 1:
+                        icon_color = _TOPIC_COLOR_VIP
+
             topic = await self.bot.create_forum_topic(
                 chat_id=self.group_chat_id,
                 name=f"👤 {customer_name}",
+                icon_color=icon_color,
             )
             thread_id = topic.message_thread_id
             self._topic_cache[customer_chat_id] = thread_id
@@ -925,7 +944,8 @@ class TopicBridgeMiddleware(Middleware):
                 f"• Chat ID: {customer_chat_id}\n"
                 f"• 来源: {_channel_labels.get(channel, channel)}\n"
             )
-            erp_info = await self._fetch_erp_user_info(customer_chat_id)
+            if not erp_info and not self._is_guest(customer_chat_id):
+                erp_info = await self._fetch_erp_user_info(customer_chat_id)
             if erp_info:
                 welcome += f"\n{erp_info}\n"
             welcome += "\n直接回复即可发送给用户。\n输入 /help 查看所有命令。"
@@ -990,26 +1010,28 @@ class TopicBridgeMiddleware(Middleware):
         """Check if customer is an anonymous/guest user (no ERP account)."""
         return customer_chat_id.startswith("guest_") or customer_chat_id.startswith("anon_")
 
-    async def _fetch_erp_user_info(self, customer_chat_id: str) -> str | None:
-        """Fetch and format ERP user info for display in agent topic."""
-        if not self.erp:
-            return None
-        if self._is_guest(customer_chat_id):
+    async def _get_erp_user_obj(self, customer_chat_id: str):
+        """Fetch raw ERP UserInfo object (or None)."""
+        if not self.erp or self._is_guest(customer_chat_id):
             return None
         try:
-            # Prefer binding (platform_user_id = real ERP userId)
             cc = self._customer_channel.get(customer_chat_id, "telegram")
             binding = await self.db.get_binding_by_chat(cc, customer_chat_id)
             user_info = None
             if binding:
                 user_info = await self.erp.get_user_info(binding.platform_user_id)
             if not user_info:
-                # Fallback: try chat_id directly (works if chat_id happens to be userId)
                 user_info = await self.erp.get_user_info(customer_chat_id)
-            if user_info:
-                return user_info.summary_for_agent()
+            return user_info
         except Exception as e:
-            logger.warning("ERP user info lookup failed for %s: %s", customer_chat_id, e)
+            logger.warning("ERP user obj lookup failed for %s: %s", customer_chat_id, e)
+            return None
+
+    async def _fetch_erp_user_info(self, customer_chat_id: str) -> str | None:
+        """Fetch and format ERP user info for display in agent topic."""
+        user_info = await self._get_erp_user_obj(customer_chat_id)
+        if user_info:
+            return user_info.summary_for_agent()
         return None
 
     async def _get_customer_summary(self, customer_chat_id: str) -> str:

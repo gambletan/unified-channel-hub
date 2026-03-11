@@ -23,8 +23,9 @@ Handler = Any  # unified_channel.Handler type
 class TicketMiddleware(Middleware):
     """Creates/finds tickets per chat and logs all messages."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, ai_id: str = "ai:minimax"):
         self.db = db
+        self.ai_id = ai_id  # e.g. "ai:minimax:MiniMax-Text-01"
 
     async def process(self, msg: UnifiedMessage, next_handler: Handler) -> Any:
         channel = msg.channel
@@ -52,6 +53,7 @@ class TicketMiddleware(Middleware):
             logger.info("New ticket %s from %s:%s", ticket.id, channel, chat_id)
 
         # Store customer message
+        customer_id = ticket.customer_id
         await self.db.add_message(TicketMessage(
             ticket_id=ticket.id,
             role="customer",
@@ -59,6 +61,8 @@ class TicketMiddleware(Middleware):
             sender_name=msg.sender.display_name or msg.sender.username,
             content=msg.content.text or "",
             channel=channel,
+            from_id=customer_id,
+            to_id=self.ai_id,
         ))
 
         # Inject ticket into metadata for downstream middleware
@@ -71,12 +75,16 @@ class TicketMiddleware(Middleware):
 
         # Store AI/agent reply
         if result and isinstance(result, str):
-            role = "agent" if ticket.status == TicketStatus.ASSIGNED else "ai"
+            is_agent = ticket.status == TicketStatus.ASSIGNED
+            role = "agent" if is_agent else "ai"
+            reply_from = ticket.assigned_agent_id if is_agent else self.ai_id
             await self.db.add_message(TicketMessage(
                 ticket_id=ticket.id,
                 role=role,
                 content=result,
                 channel=channel,
+                from_id=reply_from,
+                to_id=customer_id,
             ))
 
             # Log first response time (check if first_response event already exists)

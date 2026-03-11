@@ -153,7 +153,11 @@ async def run(config_path: str = "config.yaml") -> None:
             logger.info("Topic bridge enabled for group %s", tb_config["group_chat_id"])
 
     manager.add_middleware(IdentityMiddleware(db))  # Bind IM users to platform users
-    manager.add_middleware(TicketMiddleware(db))
+    # Build AI sender ID: "ai:{backend}:{model}"
+    ai_backend_name = ai_config.get("backend", "minimax")
+    ai_model_name = ai_config.get("model", "unknown")
+    ai_sender_id = f"ai:{ai_backend_name}:{ai_model_name}"
+    manager.add_middleware(TicketMiddleware(db, ai_id=ai_sender_id))
     manager.add_middleware(ConversationMemory(max_turns=20))
     manager.add_middleware(AgentReplyMiddleware(db, send_fn=manager.send))
     manager.add_middleware(EscalationMiddleware(db, ai_router, send_fn=manager.send))

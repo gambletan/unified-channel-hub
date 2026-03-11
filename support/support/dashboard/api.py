@@ -166,11 +166,15 @@ class DashboardAPI:
 
         # Store message
         from ..models import TicketMessage
+        agent_id = body.get("agent_id", "dashboard")
         await self.db.add_message(TicketMessage(
             ticket_id=ticket_id,
             role="agent",
+            sender_id=agent_id,
             content=text,
             channel=ticket.channel,
+            from_id=agent_id,
+            to_id=ticket.customer_id,
         ))
 
         await self.broadcast({"type": "message", "ticket_id": ticket_id})

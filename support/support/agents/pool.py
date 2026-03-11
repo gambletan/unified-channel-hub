@@ -81,6 +81,8 @@ class AgentReplyMiddleware(Middleware):
             sender_name=agent.name,
             content=text,
             channel=msg.channel,
+            from_id=agent.id,
+            to_id=assigned_ticket.customer_id,
         ))
 
         return f"Reply sent to customer (ticket #{assigned_ticket.id})"

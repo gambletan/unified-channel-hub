@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS ticket_messages (
     sender_name TEXT,
     content TEXT NOT NULL,
     channel TEXT,
+    from_id TEXT,
+    to_id TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ticket ON ticket_messages(ticket_id);
@@ -154,6 +156,8 @@ class Database:
         migrations = [
             ("topic_mappings", "closed", "ALTER TABLE topic_mappings ADD COLUMN closed INTEGER DEFAULT 0"),
             ("topic_mappings", "channel", "ALTER TABLE topic_mappings ADD COLUMN channel TEXT DEFAULT 'telegram'"),
+            ("ticket_messages", "from_id", "ALTER TABLE ticket_messages ADD COLUMN from_id TEXT"),
+            ("ticket_messages", "to_id", "ALTER TABLE ticket_messages ADD COLUMN to_id TEXT"),
         ]
         for table, column, sql in migrations:
             try:
@@ -299,9 +303,9 @@ class Database:
 
     async def add_message(self, msg: TicketMessage) -> TicketMessage:
         async with self.db.execute(
-            """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, _iso(msg.created_at)),
+            """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, from_id, to_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, msg.from_id, msg.to_id, _iso(msg.created_at)),
         ) as cur:
             msg.id = cur.lastrowid or 0
         await self.db.commit()
@@ -319,6 +323,8 @@ class Database:
                     id=r["id"], ticket_id=r["ticket_id"], role=r["role"],
                     sender_id=r["sender_id"], sender_name=r["sender_name"],
                     content=r["content"], channel=r["channel"],
+                    from_id=r["from_id"] if "from_id" in r.keys() else None,
+                    to_id=r["to_id"] if "to_id" in r.keys() else None,
                     created_at=_parse_dt(r["created_at"]),
                 )
                 for r in rows

@@ -57,6 +57,8 @@ class TicketMessage:
     sender_name: str | None = None
     content: str = ""
     channel: str | None = None
+    from_id: str | None = None  # sender: customer_id, agent.id, or "ai:{model}"
+    to_id: str | None = None    # receiver: customer_id, agent.id, or "ai:{model}"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
