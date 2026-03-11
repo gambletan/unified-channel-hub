@@ -388,7 +388,36 @@ class TopicBridgeMiddleware(Middleware):
         if stable_key.startswith("u_"):
             msg.metadata["platform_user_id"] = stable_key[2:]
 
-        # Detect language — always follow the user's latest language
+        # ── Step 1: Forward message to topic IMMEDIATELY (no blocking) ──
+        is_media = msg.content.type == ContentType.MEDIA
+        if is_media:
+            await self._forward_media_to_topic(msg, topic_id, text, text)
+        else:
+            try:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    text=f"👤 {text}",
+                )
+            except Exception as e:
+                logger.error("Failed to forward to topic %s: %s", topic_id, e)
+
+        # Start reply timeout
+        self._start_timer(chat_id, topic_id)
+
+        # Check "转人工" / "agent" request
+        if text.strip().lower() in ("转人工", "agent", "human"):
+            try:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    text="🔔 用户请求转人工，请尽快回复。",
+                )
+            except Exception:
+                pass
+            return "正在为您转接人工客服，请稍候。🙋"
+
+        # ── Step 2: Language detection + translation (async, non-blocking) ──
         lang = await self._detect_language(text)
         prev_lang = self._user_lang.get(chat_id, self.default_lang)
         if lang != prev_lang:
@@ -407,91 +436,63 @@ class TopicBridgeMiddleware(Middleware):
             except Exception:
                 pass
 
-        # Translate for agent if not default language
-        display_text = text
+        # Append translation to topic if needed (as follow-up message)
         if lang != self.default_lang and self.router.get_backend("translate"):
-            translated = await self._translate(text, self.default_lang, lang)
-            if translated and translated != text:
-                display_text = f"{text}\n\n🌐 _{translated}_"
-
-        # Forward to topic — media messages get forwarded directly,
-        # text messages are sent with translation
-        is_media = msg.content.type == ContentType.MEDIA
-        if is_media:
-            await self._forward_media_to_topic(msg, topic_id, text, display_text)
-        else:
-            try:
-                await self.bot.send_message(
-                    chat_id=self.group_chat_id,
-                    message_thread_id=topic_id,
-                    text=f"👤 {display_text}",
-                    parse_mode="Markdown",
-                )
-            except Exception as e:
-                logger.error("Failed to forward to topic %s: %s", topic_id, e)
-                # Retry without markdown
-                try:
-                    await self.bot.send_message(
-                        chat_id=self.group_chat_id,
-                        message_thread_id=topic_id,
-                        text=f"👤 {text}",
-                    )
-                except Exception:
-                    pass
-
-        # Start reply timeout
-        self._start_timer(chat_id, topic_id)
-
-        # Check "转人工" / "agent" request
-        if text.strip().lower() in ("转人工", "agent", "human"):
-            try:
-                await self.bot.send_message(
-                    chat_id=self.group_chat_id,
-                    message_thread_id=topic_id,
-                    text="🔔 用户请求转人工，请尽快回复。",
-                )
-            except Exception:
-                pass
-            return "正在为您转接人工客服，请稍候。🙋"
+            asyncio.create_task(self._send_translation(topic_id, text, self.default_lang, lang))
 
         # Inject detected language so AI replies in the correct language
-        user_lang = self._user_lang.get(chat_id, self.default_lang)
-        msg.metadata["user_lang"] = user_lang
+        msg.metadata["user_lang"] = lang
 
-        # Run AI pipeline
+        # ── Step 3: Run AI pipeline ──
         result = await next_handler(msg)
 
-        # Forward AI reply to topic (with translation only if AI replied in non-default language)
+        # ── Step 4: Forward AI reply to topic ──
         if result and isinstance(result, str):
             self._cancel_timer(chat_id)
-            display = f"🤖 {result}"
-            user_lang = self._user_lang.get(chat_id, self.default_lang)
-            if user_lang != self.default_lang and self.router.get_backend("translate"):
-                # Detect the language of the AI reply — only translate if it's NOT already in default_lang
-                reply_lang = await self._detect_language(result)
-                if reply_lang != self.default_lang:
-                    translated = await self._translate(result, self.default_lang, reply_lang)
-                    if translated and translated != result:
-                        display = f"🤖 {result}\n\n📝 _{translated}_"
             try:
                 await self.bot.send_message(
                     chat_id=self.group_chat_id,
                     message_thread_id=topic_id,
-                    text=display,
+                    text=f"🤖 {result}",
+                )
+            except Exception as e:
+                logger.error("Failed to forward AI reply to topic: %s", e)
+
+            # Append translation of AI reply if user is non-default language
+            if lang != self.default_lang and self.router.get_backend("translate"):
+                asyncio.create_task(self._send_ai_translation(topic_id, result, self.default_lang))
+
+        return result
+
+    async def _send_translation(self, topic_id: int, text: str, target_lang: str, source_lang: str) -> None:
+        """Send translation as a follow-up message in the topic (fire-and-forget)."""
+        try:
+            translated = await self._translate(text, target_lang, source_lang)
+            if translated and translated != text:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id,
+                    message_thread_id=topic_id,
+                    text=f"🌐 _{translated}_",
                     parse_mode="Markdown",
                 )
-            except Exception:
-                # Retry without markdown
-                try:
+        except Exception as e:
+            logger.warning("Translation follow-up failed: %s", e)
+
+    async def _send_ai_translation(self, topic_id: int, text: str, target_lang: str) -> None:
+        """Send translation of AI reply as a follow-up (fire-and-forget)."""
+        try:
+            reply_lang = await self._detect_language(text)
+            if reply_lang != target_lang:
+                translated = await self._translate(text, target_lang, reply_lang)
+                if translated and translated != text:
                     await self.bot.send_message(
                         chat_id=self.group_chat_id,
                         message_thread_id=topic_id,
-                        text=f"🤖 {result}",
+                        text=f"📝 _{translated}_",
+                        parse_mode="Markdown",
                     )
-                except Exception as e:
-                    logger.error("Failed to forward AI reply to topic: %s", e)
-
-        return result
+        except Exception as e:
+            logger.warning("AI translation follow-up failed: %s", e)
 
     # =========================================================================
     # Media Forwarding (all channels)

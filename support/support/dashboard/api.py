@@ -37,23 +37,46 @@ def _is_public(path: str) -> bool:
     return False
 
 
+def _load_api_keys() -> dict[str, str]:
+    """Load API keys from SUPPORT_API_KEYS env var.
+
+    Format: "user1:sk-cs-xxx,user2:sk-cs-yyy"
+    Also supports legacy single-key SUPPORT_API_KEY.
+    Returns {key: username} mapping.
+    """
+    keys: dict[str, str] = {}
+    # Multi-key format
+    raw = os.environ.get("SUPPORT_API_KEYS", "")
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            name, key = entry.split(":", 1)
+            keys[key.strip()] = name.strip()
+    # Legacy single key
+    legacy = os.environ.get("SUPPORT_API_KEY", "")
+    if legacy:
+        keys[legacy] = "default"
+    return keys
+
+
 @web.middleware
 async def api_key_middleware(request: web.Request, handler):
     """Verify x-api-key header for protected API endpoints."""
     if _is_public(request.path):
         return await handler(request)
 
-    api_key = os.environ.get("SUPPORT_API_KEY", "")
-    if not api_key:
-        # No key configured — allow all (dev mode)
+    valid_keys = _load_api_keys()
+    if not valid_keys:
+        # No keys configured — allow all (dev mode)
         return await handler(request)
 
     provided = request.headers.get("x-api-key", "")
-    if provided != api_key:
+    if provided not in valid_keys:
         return web.json_response(
             {"error": "Unauthorized", "message": "Missing or invalid x-api-key header"},
             status=401,
         )
+    request["api_user"] = valid_keys[provided]
     return await handler(request)
 
 
