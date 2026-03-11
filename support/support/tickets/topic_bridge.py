@@ -380,6 +380,12 @@ class TopicBridgeMiddleware(Middleware):
             msg.metadata = {}
         msg.metadata["topic_bridge"] = True
 
+        # If this chat has a stable key (u_xxx), inject platform_user_id
+        # so AI knows the user is logged in even if IdentityMiddleware can't find the binding
+        stable_key = self._reverse_cache.get(topic_id, "")
+        if stable_key.startswith("u_"):
+            msg.metadata["platform_user_id"] = stable_key[2:]
+
         # Detect language — always follow the user's latest language
         lang = await self._detect_language(text)
         prev_lang = self._user_lang.get(chat_id, self.default_lang)
