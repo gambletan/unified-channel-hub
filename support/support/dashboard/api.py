@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 import aiohttp
@@ -15,6 +16,45 @@ from ..db import Database
 from ..models import TicketStatus
 
 logger = logging.getLogger(__name__)
+
+# Public endpoints that don't require API key
+_PUBLIC_PATHS = frozenset({
+    "/api/connect-links",
+    "/api/connect-session",
+    "/api/connect-config",
+    "/ws",
+})
+
+
+def _is_public(path: str) -> bool:
+    """Check if a request path is public (no API key needed)."""
+    for p in _PUBLIC_PATHS:
+        if path == p or path.startswith(p + "/"):
+            return True
+    # Static files
+    if not path.startswith("/api/"):
+        return True
+    return False
+
+
+@web.middleware
+async def api_key_middleware(request: web.Request, handler):
+    """Verify x-api-key header for protected API endpoints."""
+    if _is_public(request.path):
+        return await handler(request)
+
+    api_key = os.environ.get("SUPPORT_API_KEY", "")
+    if not api_key:
+        # No key configured — allow all (dev mode)
+        return await handler(request)
+
+    provided = request.headers.get("x-api-key", "")
+    if provided != api_key:
+        return web.json_response(
+            {"error": "Unauthorized", "message": "Missing or invalid x-api-key header"},
+            status=401,
+        )
+    return await handler(request)
 
 
 class DashboardAPI:
@@ -39,7 +79,7 @@ class DashboardAPI:
         self._base_url = (base_url or "").rstrip("/")  # e.g. "http://192.168.1.100:8081"
         self._tg_bot_username: str | None = None  # resolved lazily
         self._ws_clients: list[web.WebSocketResponse] = []
-        self._app = web.Application()
+        self._app = web.Application(middlewares=[api_key_middleware])
         self._runner: web.AppRunner | None = None
         self._setup_routes()
 
