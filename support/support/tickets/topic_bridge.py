@@ -998,7 +998,7 @@ class TopicBridgeMiddleware(Middleware):
             if lang:
                 self._user_lang[customer_chat_id] = lang
 
-            # Reopen if topic was closed
+            # Reopen if topic was closed — reopen fast, send summary async
             if is_closed:
                 try:
                     await self.bot.reopen_forum_topic(
@@ -1006,16 +1006,9 @@ class TopicBridgeMiddleware(Middleware):
                         message_thread_id=thread_id,
                     )
                     await self._set_topic_closed(customer_chat_id, False)
-                    # Show previous conversation summary + ERP user info
-                    summary = await self._get_customer_summary(customer_chat_id)
-                    erp_info = await self._fetch_erp_user_info(customer_chat_id)
-                    reopen_text = f"🔓 用户 {customer_name} 发起新会话\n{summary}"
-                    if erp_info:
-                        reopen_text += f"\n\n{erp_info}"
-                    await self.bot.send_message(
-                        chat_id=self.group_chat_id,
-                        message_thread_id=thread_id,
-                        text=reopen_text,
+                    # Send summary + ERP info as async follow-up (don't block forwarding)
+                    asyncio.create_task(
+                        self._send_reopen_summary(thread_id, customer_chat_id, customer_name)
                     )
                     logger.info("Reopened topic (thread=%s) for %s", thread_id, customer_chat_id)
                 except Exception as e:
@@ -1023,26 +1016,13 @@ class TopicBridgeMiddleware(Middleware):
             return thread_id
 
         try:
-            # Determine topic icon color by user type:
-            #   Guest (anonymous) → blue, Registered → yellow, VIP → red
+            # Create topic immediately with default color, update later if needed
             _TOPIC_COLOR_GUEST = 7322096       # blue
-            _TOPIC_COLOR_REGISTERED = 16766590  # yellow
-            _TOPIC_COLOR_VIP = 16478047         # red
-            icon_color = _TOPIC_COLOR_GUEST
-            erp_info = None
-            if not self._is_guest(customer_chat_id):
-                erp_info = await self._fetch_erp_user_info(customer_chat_id)
-                if erp_info:
-                    # ERP found → registered; check user_level for VIP
-                    icon_color = _TOPIC_COLOR_REGISTERED
-                    user_info = await self._get_erp_user_obj(customer_chat_id)
-                    if user_info and user_info.user_level >= 1:
-                        icon_color = _TOPIC_COLOR_VIP
 
             topic = await self.bot.create_forum_topic(
                 chat_id=self.group_chat_id,
                 name=f"👤 {customer_name}",
-                icon_color=icon_color,
+                icon_color=_TOPIC_COLOR_GUEST,
             )
             thread_id = topic.message_thread_id
             self._topic_cache[customer_chat_id] = thread_id
@@ -1050,30 +1030,73 @@ class TopicBridgeMiddleware(Middleware):
 
             await self._save_topic_mapping(customer_chat_id, thread_id, channel)
 
-            # Build welcome message with optional ERP user info
-            _channel_labels = {"telegram": "Telegram", "webchat": "Web Chat", "whatsapp": "WhatsApp", "discord": "Discord", "line": "LINE", "wechat": "WeChat", "slack": "Slack"}
-            welcome = (
-                f"📋 新会话\n"
-                f"• 用户: {customer_name}\n"
-                f"• Chat ID: {customer_chat_id}\n"
-                f"• 来源: {_channel_labels.get(channel, channel)}\n"
-            )
-            if not erp_info and not self._is_guest(customer_chat_id):
-                erp_info = await self._fetch_erp_user_info(customer_chat_id)
-            if erp_info:
-                welcome += f"\n{erp_info}\n"
-            welcome += "\n直接回复即可发送给用户。\n输入 /help 查看所有命令。"
-
-            await self.bot.send_message(
-                chat_id=self.group_chat_id,
-                message_thread_id=thread_id,
-                text=welcome,
+            # Send welcome + ERP info async (don't block message forwarding)
+            asyncio.create_task(
+                self._send_welcome_info(thread_id, customer_chat_id, customer_name, channel)
             )
             logger.info("Created topic (thread=%s) for %s", thread_id, customer_chat_id)
             return thread_id
         except Exception as e:
             logger.error("Failed to create topic for %s: %s", customer_chat_id, e)
             raise
+
+    async def _send_reopen_summary(self, thread_id: int, customer_chat_id: str, customer_name: str) -> None:
+        """Send reopen summary + ERP info as async follow-up (fire-and-forget)."""
+        try:
+            summary = await self._get_customer_summary(customer_chat_id)
+            erp_info = await self._fetch_erp_user_info(customer_chat_id)
+            reopen_text = f"🔓 用户 {customer_name} 发起新会话\n{summary}"
+            if erp_info:
+                reopen_text += f"\n\n{erp_info}"
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                text=reopen_text,
+            )
+        except Exception as e:
+            logger.warning("Reopen summary failed: %s", e)
+
+    async def _send_welcome_info(self, thread_id: int, customer_chat_id: str, customer_name: str, channel: str) -> None:
+        """Send welcome message + ERP info async (fire-and-forget)."""
+        try:
+            _TOPIC_COLOR_REGISTERED = 16766590  # yellow
+            _TOPIC_COLOR_VIP = 16478047         # red
+            _channel_labels = {"telegram": "Telegram", "webchat": "Web Chat", "whatsapp": "WhatsApp", "discord": "Discord", "line": "LINE", "wechat": "WeChat", "slack": "Slack"}
+
+            welcome = (
+                f"📋 新会话\n"
+                f"• 用户: {customer_name}\n"
+                f"• Chat ID: {customer_chat_id}\n"
+                f"• 来源: {_channel_labels.get(channel, channel)}\n"
+            )
+
+            erp_info = None
+            if not self._is_guest(customer_chat_id):
+                erp_info = await self._fetch_erp_user_info(customer_chat_id)
+                if erp_info:
+                    welcome += f"\n{erp_info}\n"
+                    # Update topic color based on user type
+                    icon_color = _TOPIC_COLOR_REGISTERED
+                    user_info = await self._get_erp_user_obj(customer_chat_id)
+                    if user_info and user_info.user_level >= 1:
+                        icon_color = _TOPIC_COLOR_VIP
+                    try:
+                        await self.bot.edit_forum_topic(
+                            chat_id=self.group_chat_id,
+                            message_thread_id=thread_id,
+                            icon_color=icon_color,
+                        )
+                    except Exception:
+                        pass  # Color update is best-effort
+
+            welcome += "\n直接回复即可发送给用户。\n输入 /help 查看所有命令。"
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                text=welcome,
+            )
+        except Exception as e:
+            logger.warning("Welcome info failed: %s", e)
 
     # =========================================================================
     # DB Operations
