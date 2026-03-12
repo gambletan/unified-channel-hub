@@ -568,8 +568,14 @@ class TopicBridgeMiddleware(Middleware):
                     sticker=buf,
                 )
             else:
-                # document / unknown — send as file
-                buf.name = f"file.{media_type}" if media_type != "unknown" else "file.bin"
+                # document / unknown — send as file, preserve original filename
+                original_name = msg.content.media_filename
+                if original_name:
+                    buf.name = original_name
+                elif media_type != "unknown":
+                    buf.name = f"file.{media_type}"
+                else:
+                    buf.name = "file.bin"
                 await self.bot.send_document(**kwargs, document=buf)
 
             # Also send text label

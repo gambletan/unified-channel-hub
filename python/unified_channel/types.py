@@ -32,6 +32,7 @@ class MessageContent:
     args: list[str] = field(default_factory=list)
     media_url: str | None = None
     media_type: str | None = None
+    media_filename: str | None = None
     callback_data: str | None = None
 
 

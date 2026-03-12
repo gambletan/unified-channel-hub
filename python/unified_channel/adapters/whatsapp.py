@@ -183,6 +183,26 @@ class WhatsAppAdapter(ChannelAdapter):
 
         return web.Response(text="OK")
 
+    async def _download_media_b64(self, media_id: str) -> str | None:
+        """Download media by ID from WhatsApp Cloud API, return base64 string."""
+        if not self._http:
+            return None
+        try:
+            # Step 1: get download URL
+            resp = await self._http.get(f"/{media_id}")
+            resp.raise_for_status()
+            url = resp.json().get("url")
+            if not url:
+                return None
+            # Step 2: download binary (use same auth header)
+            dl = await self._http.get(url)
+            dl.raise_for_status()
+            import base64
+            return base64.b64encode(dl.content).decode()
+        except Exception as e:
+            logger.warning("whatsapp media download failed (%s): %s", media_id, e)
+            return None
+
     async def _process_message(self, wa_msg: dict, contacts: dict) -> None:
         msg_id = wa_msg.get("id", "")
         from_number = wa_msg.get("from", "")
@@ -203,11 +223,19 @@ class WhatsAppAdapter(ChannelAdapter):
                 mc = MessageContent(type=ContentType.TEXT, text=text)
         elif msg_type in ("image", "video", "audio", "document"):
             media = wa_msg.get(msg_type, {})
+            media_id = media.get("id")
+            media_b64 = await self._download_media_b64(media_id) if media_id else None
+            mime = media.get("mime_type", f"{msg_type}/octet-stream")
+            if media_b64:
+                data_uri = f"data:{mime};base64,{media_b64}"
+            else:
+                data_uri = None
             mc = MessageContent(
                 type=ContentType.MEDIA,
                 text=media.get("caption", ""),
                 media_type=msg_type,
-                media_url=media.get("id"),  # media ID, needs download via API
+                media_url=data_uri,
+                media_filename=media.get("filename"),
             )
         elif msg_type == "reaction":
             mc = MessageContent(
