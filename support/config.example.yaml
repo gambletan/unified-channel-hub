@@ -8,8 +8,15 @@ channels:
     port: 8082
     path: /ws
   whatsapp:
-    mode: unofficial
-    bridge_url: "http://localhost:8084"
+    # Option A: Official Meta Cloud API (recommended)
+    mode: official
+    phone_number_id: "${WHATSAPP_PHONE_NUMBER_ID}"
+    access_token: "${WHATSAPP_ACCESS_TOKEN}"
+    verify_token: "${WHATSAPP_VERIFY_TOKEN}"
+    port: 8443  # webhook listener port (nginx proxy to this)
+    # Option B: Unofficial whatsapp-web.js bridge
+    # mode: unofficial
+    # bridge_url: "http://localhost:8084"
 
 ai:
   backend: minimax
