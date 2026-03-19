@@ -9,6 +9,10 @@ export class ChannelManager {
   private middlewares: Middleware[] = [];
   private fallbackHandler: Handler | null = null;
   private running = false;
+  private cachedPipeline: Handler | null = null;
+  private shutdownResolve: (() => void) | null = null;
+  /** Max concurrent sends in broadcast(). */
+  broadcastConcurrency = 10;
 
   addChannel(adapter: ChannelAdapter): this {
     this.channels.set(adapter.channelId, adapter);
@@ -17,11 +21,13 @@ export class ChannelManager {
 
   addMiddleware(mw: Middleware): this {
     this.middlewares.push(mw);
+    this.cachedPipeline = null; // invalidate cached chain
     return this;
   }
 
   onMessage(handler: Handler): this {
     this.fallbackHandler = handler;
+    this.cachedPipeline = null; // invalidate cached chain
     return this;
   }
 
@@ -44,22 +50,34 @@ export class ChannelManager {
   async broadcast(
     text: string,
     chatIds: Record<string, string>
-  ): Promise<void> {
-    const tasks = Object.entries(chatIds).map(([channel, chatId]) =>
-      this.send(channel, chatId, text).catch(() => undefined)
-    );
-    await Promise.all(tasks);
+  ): Promise<PromiseSettledResult<string | undefined>[]> {
+    const entries = Object.entries(chatIds);
+    const allResults: PromiseSettledResult<string | undefined>[] = [];
+    // Send in batches to avoid overwhelming connections / rate limits
+    for (let i = 0; i < entries.length; i += this.broadcastConcurrency) {
+      const batch = entries.slice(i, i + this.broadcastConcurrency);
+      const results = await Promise.allSettled(
+        batch.map(([channel, chatId]) => this.send(channel, chatId, text))
+      );
+      allResults.push(...results);
+    }
+    return allResults;
   }
 
   async getStatus(): Promise<Record<string, ChannelStatus>> {
+    // Parallel status fetch across all adapters
+    const ids = [...this.channels.keys()];
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          return await this.channels.get(id)!.getStatus();
+        } catch (e) {
+          return { connected: false, channel: id, error: String(e) } as ChannelStatus;
+        }
+      })
+    );
     const statuses: Record<string, ChannelStatus> = {};
-    for (const [id, adapter] of this.channels) {
-      try {
-        statuses[id] = await adapter.getStatus();
-      } catch (e) {
-        statuses[id] = { connected: false, channel: id, error: String(e) };
-      }
-    }
+    for (let i = 0; i < ids.length; i++) statuses[ids[i]] = results[i];
     return statuses;
   }
 
@@ -79,14 +97,10 @@ export class ChannelManager {
       `unified-channel started: channels=[${[...this.channels.keys()].join(", ")}]`
     );
 
-    // Keep alive
+    // Keep alive — event-driven instead of polling
     await new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (!this.running) {
-          clearInterval(check);
-          resolve();
-        }
-      }, 1000);
+      this.shutdownResolve = resolve;
+      if (!this.running) resolve();
     });
   }
 
@@ -99,6 +113,8 @@ export class ChannelManager {
         console.error(`Error disconnecting ${adapter.channelId}:`, e);
       }
     }
+    this.shutdownResolve?.();
+    this.shutdownResolve = null;
     console.log("unified-channel shut down");
   }
 
@@ -117,20 +133,26 @@ export class ChannelManager {
     }
   }
 
-  private async runPipeline(msg: UnifiedMessage): Promise<HandlerResult> {
+  private buildPipeline(): Handler {
     let handler: Handler = async (m) => {
       if (this.fallbackHandler) return this.fallbackHandler(m);
       return null;
     };
 
-    // Build chain in reverse so first-added middleware runs first
     for (let i = this.middlewares.length - 1; i >= 0; i--) {
       const mw = this.middlewares[i];
       const next = handler;
       handler = async (m) => mw.process(m, next);
     }
 
-    return handler(msg);
+    return handler;
+  }
+
+  private async runPipeline(msg: UnifiedMessage): Promise<HandlerResult> {
+    if (!this.cachedPipeline) {
+      this.cachedPipeline = this.buildPipeline();
+    }
+    return this.cachedPipeline(msg);
   }
 
   private toOutbound(

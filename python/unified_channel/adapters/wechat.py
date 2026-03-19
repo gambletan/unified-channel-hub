@@ -231,10 +231,10 @@ class WeChatAdapter(ChannelAdapter):
     async def receive(self) -> AsyncIterator[UnifiedMessage]:
         while self._connected:
             try:
-                msg = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                msg = await self._queue.get()
                 yield msg
-            except asyncio.TimeoutError:
-                continue
+            except asyncio.CancelledError:
+                break
 
     async def send(self, msg: OutboundMessage) -> str | None:
         if requests is None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import AsyncIterator
 
@@ -52,6 +54,10 @@ class SlackAdapter(ChannelAdapter):
         self._bot_user_id: str | None = None
         self._handler: AsyncSocketModeHandler | None = None
 
+        self._user_cache: OrderedDict[str, tuple[str, str, float]] = OrderedDict()
+        self._user_cache_ttl = 3600.0  # 1 hour
+        self._user_cache_maxsize = 1000  # LRU cap
+
         self._app = AsyncApp(token=bot_token)
         self._setup_handlers()
 
@@ -73,15 +79,8 @@ class SlackAdapter(ChannelAdapter):
             user_id = event.get("user", "")
             self._last_activity = datetime.now()
 
-            # Resolve user info
-            try:
-                user_info = await self._app.client.users_info(user=user_id)
-                user_data = user_info.get("user", {})
-                username = user_data.get("name", user_id)
-                display_name = user_data.get("real_name", username)
-            except Exception:
-                username = user_id
-                display_name = user_id
+            # Resolve user info (cached to avoid per-message API calls)
+            username, display_name = await self._resolve_user(user_id)
 
             # Check if it's a command
             if text.startswith(self._prefix):
@@ -122,6 +121,31 @@ class SlackAdapter(ChannelAdapter):
             )
             await self._queue.put(msg)
 
+    async def _resolve_user(self, user_id: str) -> tuple[str, str]:
+        """Return (username, display_name) with TTL + LRU cache."""
+        now = time.monotonic()
+        cached = self._user_cache.get(user_id)
+        if cached is not None and (now - cached[2]) < self._user_cache_ttl:
+            self._user_cache.move_to_end(user_id)  # O(1) LRU touch
+            return cached[0], cached[1]
+
+        try:
+            user_info = await self._app.client.users_info(user=user_id)
+            user_data = user_info.get("user", {})
+            username = user_data.get("name", user_id)
+            display_name = user_data.get("real_name", username)
+        except Exception:
+            username = user_id
+            display_name = user_id
+
+        self._user_cache[user_id] = (username, display_name, now)
+        self._user_cache.move_to_end(user_id)  # ensure newest is at end
+        # Evict oldest if over maxsize
+        while len(self._user_cache) > self._user_cache_maxsize:
+            self._user_cache.popitem(last=False)  # O(1) evict oldest
+
+        return username, display_name
+
     async def connect(self) -> None:
         self._handler = AsyncSocketModeHandler(self._app, self._app_token)
         asyncio.create_task(self._handler.start_async())
@@ -145,10 +169,10 @@ class SlackAdapter(ChannelAdapter):
     async def receive(self) -> AsyncIterator[UnifiedMessage]:
         while self._connected:
             try:
-                msg = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                msg = await self._queue.get()
                 yield msg
-            except asyncio.TimeoutError:
-                continue
+            except asyncio.CancelledError:
+                break
 
     async def send(self, msg: OutboundMessage) -> str | None:
         kwargs: dict = {

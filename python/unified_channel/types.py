@@ -17,14 +17,14 @@ class ContentType(Enum):
     CALLBACK = "callback"
 
 
-@dataclass
+@dataclass(slots=True)
 class Identity:
     id: str
     username: str | None = None
     display_name: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class MessageContent:
     type: ContentType
     text: str = ""
@@ -36,7 +36,7 @@ class MessageContent:
     callback_data: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class UnifiedMessage:
     """Single message type that flows through the entire pipeline."""
 
@@ -52,7 +52,7 @@ class UnifiedMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class OutboundMessage:
     """Message to send back via a channel."""
 
@@ -67,14 +67,14 @@ class OutboundMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class Button:
     label: str
     callback_data: str | None = None
     url: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class ChannelStatus:
     connected: bool
     channel: str

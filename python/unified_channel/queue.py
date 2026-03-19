@@ -71,9 +71,9 @@ class InMemoryQueue:
         """Internal worker loop."""
         while self._running:
             try:
-                msg = await asyncio.wait_for(self._queue.get(), timeout=0.1)
-            except (asyncio.TimeoutError, TimeoutError):
-                continue
+                msg = await self._queue.get()
+            except asyncio.CancelledError:
+                break
             if msg is None:
                 # Sentinel for shutdown
                 self._queue.task_done()
@@ -93,8 +93,19 @@ class QueueMiddleware(Middleware):
     The actual processing happens asynchronously via the queue's on_process callback.
     """
 
-    def __init__(self, queue: InMemoryQueue) -> None:
+    def __init__(
+        self,
+        queue: InMemoryQueue,
+        *,
+        backpressure_reply: str | None = None,
+    ) -> None:
         self._queue = queue
+        self._backpressure_reply = backpressure_reply
+
+    @property
+    def is_full(self) -> bool:
+        """Check if the queue is at capacity."""
+        return self._queue.size() >= self._queue._max_size
 
     async def process(
         self, msg: UnifiedMessage, next_handler: Handler
@@ -102,6 +113,8 @@ class QueueMiddleware(Middleware):
         accepted = self._queue.enqueue(msg)
         if not accepted:
             logger.warning("Queue full, dropping message %s", msg.id)
+            if self._backpressure_reply:
+                return self._backpressure_reply
         # Message will be processed asynchronously; return None (no inline reply)
         return None
 

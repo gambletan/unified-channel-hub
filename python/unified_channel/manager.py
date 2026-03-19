@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import time
 from typing import Any
 
 from .adapter import ChannelAdapter
@@ -31,11 +31,21 @@ class ChannelManager:
         await manager.run()
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        broadcast_concurrency: int = 10,
+        status_cache_ttl: float = 5.0,
+    ) -> None:
         self._channels: dict[str, ChannelAdapter] = {}
         self._middlewares: list[Middleware] = []
         self._fallback_handler: Handler | None = None
         self._tasks: list[asyncio.Task[Any]] = []
+        self._cached_pipeline: Handler | None = None
+        self.broadcast_concurrency = broadcast_concurrency
+        self.status_cache_ttl = status_cache_ttl
+        self._status_cache: dict[str, Any] | None = None
+        self._status_cache_time: float = 0.0
 
     def add_channel(self, adapter: ChannelAdapter) -> "ChannelManager":
         self._channels[adapter.channel_id] = adapter
@@ -43,11 +53,13 @@ class ChannelManager:
 
     def add_middleware(self, mw: Middleware) -> "ChannelManager":
         self._middlewares.append(mw)
+        self._cached_pipeline = None  # invalidate cached chain
         return self
 
     def on_message(self, handler: Handler) -> Handler:
         """Set fallback handler for non-command messages (decorator or direct)."""
         self._fallback_handler = handler
+        self._cached_pipeline = None  # invalidate cached chain
         return handler
 
     async def send(
@@ -75,30 +87,44 @@ class ChannelManager:
         )
 
     async def broadcast(self, text: str, chat_ids: dict[str, str]) -> None:
-        """Send to multiple channels. chat_ids = {channel: chat_id}."""
-        tasks = [
-            self.send(channel, chat_id, text)
-            for channel, chat_id in chat_ids.items()
-        ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        """Send to multiple channels in batches to avoid connection storms."""
+        entries = list(chat_ids.items())
+        for i in range(0, len(entries), self.broadcast_concurrency):
+            batch = entries[i : i + self.broadcast_concurrency]
+            await asyncio.gather(
+                *(self.send(ch, cid, text) for ch, cid in batch),
+                return_exceptions=True,
+            )
 
     async def get_status(self) -> dict[str, Any]:
-        """Get status of all registered channels."""
-        statuses = {}
-        for cid, adapter in self._channels.items():
+        """Get status of all registered channels (parallel, cached with TTL)."""
+        now = time.monotonic()
+        if self._status_cache is not None and (now - self._status_cache_time) < self.status_cache_ttl:
+            return self._status_cache
+
+        async def _safe_status(cid: str, adapter: ChannelAdapter) -> tuple[str, Any]:
             try:
-                statuses[cid] = await adapter.get_status()
+                return cid, await adapter.get_status()
             except Exception as e:
-                statuses[cid] = {"connected": False, "error": str(e)}
-        return statuses
+                return cid, {"connected": False, "error": str(e)}
+
+        results = await asyncio.gather(
+            *[_safe_status(cid, a) for cid, a in self._channels.items()]
+        )
+        self._status_cache = dict(results)
+        self._status_cache_time = now
+        return self._status_cache
 
     async def run(self) -> None:
         """Start all channels and process messages."""
         if not self._channels:
             raise RuntimeError("no channels registered")
 
+        # Connect all adapters in parallel
+        await asyncio.gather(
+            *(adapter.connect() for adapter in self._channels.values())
+        )
         for adapter in self._channels.values():
-            await adapter.connect()
             task = asyncio.create_task(
                 self._consume(adapter), name=f"channel:{adapter.channel_id}"
             )
@@ -151,10 +177,8 @@ class ChannelManager:
         except Exception:
             logger.exception("channel %s consumer crashed", adapter.channel_id)
 
-    async def _run_pipeline(
-        self, msg: UnifiedMessage
-    ) -> str | OutboundMessage | None:
-        """Run message through middleware chain, ending at fallback handler."""
+    def _build_pipeline(self) -> Handler:
+        """Build the middleware chain once and cache it."""
 
         async def fallback(m: UnifiedMessage) -> str | OutboundMessage | None:
             if self._fallback_handler:
@@ -162,7 +186,6 @@ class ChannelManager:
             return None
 
         handler: Handler = fallback
-        # Build chain in reverse so first-added middleware runs first
         for mw in reversed(self._middlewares):
 
             def make_next(
@@ -175,7 +198,15 @@ class ChannelManager:
 
             handler = make_next(mw, handler)
 
-        return await handler(msg)
+        return handler
+
+    async def _run_pipeline(
+        self, msg: UnifiedMessage
+    ) -> str | OutboundMessage | None:
+        """Run message through cached middleware chain."""
+        if self._cached_pipeline is None:
+            self._cached_pipeline = self._build_pipeline()
+        return await self._cached_pipeline(msg)
 
     @staticmethod
     def _to_outbound(reply: str | OutboundMessage, orig: UnifiedMessage) -> OutboundMessage:
