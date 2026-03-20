@@ -1,4 +1,4 @@
-/** unified-channel — 19 channels, 1 API. */
+/** unified-channel — 27 adapters, 1 API. */
 
 // Core
 export { ContentType } from "./types.js";
@@ -28,3 +28,8 @@ export { NextcloudAdapter } from "./adapters/nextcloud.js";
 export { SynologyAdapter } from "./adapters/synology.js";
 export { GoogleChatAdapter } from "./adapters/googlechat.js";
 export { IMessageAdapter } from "./adapters/imessage.js";
+export { EmailAdapter } from "./adapters/email.js";
+export { GoogleCalendarAdapter } from "./adapters/google_calendar.js";
+export { TwilioSMSAdapter } from "./adapters/twilio_sms.js";
+export { TwilioVoiceAdapter } from "./adapters/twilio_voice.js";
+export { HomeAssistantAdapter } from "./adapters/homeassistant.js";

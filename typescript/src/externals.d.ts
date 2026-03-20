@@ -14,3 +14,7 @@ declare module "ws" { const WS: any; export default WS; }
 declare module "nostr-tools" { export const getPublicKey: any; export const finalizeEvent: any; }
 declare module "tmi.js" { export const Client: any; }
 declare module "irc-framework" { export const Client: any; }
+declare module "nodemailer" { export function createTransport(options: any): any; }
+declare module "imap" { const Imap: any; export default Imap; }
+declare module "googleapis" { export const google: any; }
+declare module "twilio" { const twilio: any; export default twilio; }

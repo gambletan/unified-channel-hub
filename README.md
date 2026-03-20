@@ -4,12 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Node 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
 
 # unified-channel
 
-**The communication layer for personal AI assistants — IM, Email, Voice, Calendar, IoT in one unified API. Python + TypeScript + Java.**
+**Communication layer for personal AI assistants — IM, Email, Voice, Calendar, IoT in one unified API. Python + TypeScript + Java + Rust.**
 
-23 channels across 5 categories. ServiceBridge, conversation memory, rich output, and streaming. Not a chatbot platform — a library you `pip install` / `npm install` / Maven-add into **your** project and call `manager.run()`.
+27 adapters across 5 categories. ServiceBridge, conversation memory, rich output, and streaming. Not a chatbot platform — a library you `pip install` / `npm install` / Maven-add / `cargo add` into **your** project and call `manager.run()`.
 
 ## Why This Exists
 
@@ -26,13 +27,13 @@ unified-channel gives you the messaging plumbing so you can focus on your actual
 
 | Feature | What it does |
 |---------|-------------|
-| **23 Channels, 5 Categories** | **IM**: Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, Teams, LINE, Feishu, Mattermost, Google Chat, Nextcloud, Synology, Zalo, Nostr, BlueBubbles, Twitch, IRC · **Email**: Gmail/IMAP · **Voice**: Twilio Voice · **SMS**: Twilio SMS · **Calendar**: Google Calendar · **IoT**: Home Assistant |
+| **27 Adapters, 5 Categories** | **IM**: Telegram, Discord, Slack, WhatsApp, iMessage, Matrix, Teams, LINE, Feishu, Mattermost, Google Chat, Nextcloud, Synology, Zalo, Nostr, BlueBubbles, Twitch, IRC · **Email**: Gmail/IMAP · **Voice**: Twilio Voice · **SMS**: Twilio SMS · **Calendar**: Google Calendar · **IoT**: Home Assistant |
 | **ServiceBridge** | Expose any function as a chat command. Your phone becomes a remote control for your services. |
 | **ConversationMemory** | Per-user/per-channel conversation history. In-memory, SQLite, or Redis backends. |
 | **RichReply** | Send buttons, carousels, images, files — auto-degrades gracefully on platforms that don't support them. |
 | **Streaming** | Typing indicators + chunked message delivery for long-running responses. |
 | **MCP Server** | AI agents (Claude, GPT, local LLMs) control your services via standard MCP tool calls. |
-| **3 Languages** | Python, TypeScript, Java — same architecture, same API shape. |
+| **4 Languages** | Python, TypeScript, Java, Rust — same architecture, same API shape. |
 
 ## Core Value: A Remote Control Panel in Your Pocket
 
@@ -232,13 +233,13 @@ Incoming Message → [Middleware 1] → [Middleware 2] → ... → [Fallback Han
 | Feature | unified-channel | OpenClaw | Botpress | LangBot |
 |---------|:-:|:-:|:-:|:-:|
 | Embeddable library | **Yes** | No (full agent) | No (platform) | Partial |
-| Channel count | **18** | 18 | 4 | 10 |
+| Channel count | **27** | 18 | 4 | 10 |
 | ServiceBridge (remote control) | **Yes** | No | No | No |
 | Conversation memory | **Yes** | Yes | Yes | No |
 | Rich reply (auto-degrade) | **Yes** | Partial | Yes | No |
 | Streaming output | **Yes** | Yes | No | No |
 | MCP Server | **Yes** | No | No | No |
-| Python + TypeScript + Java | **Yes** | TS only | TS only | Python only |
+| Python + TypeScript + Java + Rust | **Yes** | TS only | TS only | Python only |
 | Zero required deps | **Yes** | No | No | No |
 
 ## Supported Channels
@@ -263,6 +264,11 @@ Incoming Message → [Middleware 1] → [Middleware 2] → ... → [Fallback Han
 | BlueBubbles | REST polling | Yes | Yes | stub |
 | Twitch | IRC/TMI | Yes | Yes | stub |
 | IRC | Raw IRC | Yes | Yes | Yes |
+| Email (Gmail/IMAP) | IMAP + SMTP | Yes | Yes | stub |
+| Twilio SMS | REST + Webhook | Yes | Yes | stub |
+| Twilio Voice | REST + Webhook | Yes | Yes | stub |
+| Google Calendar | REST API v3 | Yes | Yes | stub |
+| Home Assistant | WebSocket API | Yes | Yes | stub |
 
 ## Use Cases
 
@@ -304,6 +310,7 @@ unified-channel/
 ├── python/          # Python implementation (pip install)
 ├── typescript/      # TypeScript/Node.js implementation (npm install)
 ├── java/            # Java implementation (Maven)
+├── rust/            # Rust implementation (cargo add)
 ├── mcp-server/      # MCP server for AI agents
 ├── .github/
 │   ├── workflows/   # CI for all languages

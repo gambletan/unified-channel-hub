@@ -83,17 +83,25 @@ export class EmailAdapter implements ChannelAdapter {
   private poll(): void {
     if (!this.handler) return;
     this.imapClient.openBox("INBOX", true, (err: Error | null) => {
-      if (err) return;
+      if (err) {
+        console.error("email: failed to open INBOX:", err.message);
+        return;
+      }
       this.imapClient.search(["UNSEEN"], (err2: Error | null, uids: number[]) => {
-        if (err2 || !uids?.length) return;
+        if (err2) {
+          console.error("email: search failed:", err2.message);
+          return;
+        }
+        if (!uids?.length) return;
         const fetch = this.imapClient.fetch(uids, { bodies: "HEADER.FIELDS (FROM SUBJECT DATE)", markSeen: true });
         fetch.on("message", (imapMsg: any) => {
           imapMsg.on("body", (stream: any) => {
-            let buf = "";
-            stream.on("data", (chunk: Buffer) => { buf += chunk.toString(); });
+            const chunks: Buffer[] = [];
+            stream.on("data", (chunk: Buffer) => { chunks.push(chunk); });
             stream.on("end", () => {
               this.msgCounter++;
               this.lastActivity = new Date();
+              const buf = Buffer.concat(chunks).toString();
               const from = buf.match(/From:\s*(.+)/i)?.[1]?.trim() ?? "unknown";
               const subject = buf.match(/Subject:\s*(.+)/i)?.[1]?.trim() ?? "";
               this.handler!({
@@ -104,6 +112,9 @@ export class EmailAdapter implements ChannelAdapter {
               });
             });
           });
+        });
+        fetch.on("error", (err3: Error) => {
+          console.error("email: fetch error:", err3.message);
         });
       });
     });

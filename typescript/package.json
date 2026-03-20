@@ -55,7 +55,11 @@
     "mattermost-client": ">=1.0",
     "nostr-tools": ">=2.0",
     "tmi.js": ">=1.8",
-    "whatsapp-web.js": ">=1.23"
+    "whatsapp-web.js": ">=1.23",
+    "nodemailer": ">=6.0",
+    "imap": ">=0.8",
+    "googleapis": ">=130.0",
+    "twilio": ">=5.0"
   },
   "peerDependenciesMeta": {
     "grammy": {
@@ -92,6 +96,18 @@
       "optional": true
     },
     "tmi.js": {
+      "optional": true
+    },
+    "nodemailer": {
+      "optional": true
+    },
+    "imap": {
+      "optional": true
+    },
+    "googleapis": {
+      "optional": true
+    },
+    "twilio": {
       "optional": true
     }
   }
