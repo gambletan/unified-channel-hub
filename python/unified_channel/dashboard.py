@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import base64
 import logging
@@ -135,13 +136,15 @@ class Dashboard:
         # Convert ChannelStatus dataclasses to dicts
         result = {}
         for key, val in statuses.items():
-            if hasattr(val, "__dict__"):
-                d = {k: v for k, v in val.__dict__.items() if v is not None}
+            if dataclasses.is_dataclass(val) and not isinstance(val, type):
+                d = {k: v for k, v in dataclasses.asdict(val).items() if v is not None}
                 # Convert datetime fields
                 for dk, dv in d.items():
                     if isinstance(dv, datetime):
                         d[dk] = dv.isoformat()
                 result[key] = d
+            elif isinstance(val, dict):
+                result[key] = val
             else:
                 result[key] = val
         return web.json_response(result)

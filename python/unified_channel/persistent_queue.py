@@ -193,28 +193,32 @@ class SQLiteQueue:
             (now, limit),
         )
         rows = await cursor.fetchall()
-        items: list[QueueItem] = []
-        for row in rows:
-            # Mark as processing
-            await db.execute(
-                "UPDATE queue_items SET status = 'processing', updated_at = ? WHERE id = ?",
-                (now, row["id"]),
-            )
-            items.append(
-                QueueItem(
-                    id=row["id"],
-                    message=_deserialize_outbound(row["message_json"]),
-                    channel=row["channel"],
-                    priority=row["priority"],
-                    status="processing",
-                    retries=row["retries"],
-                    created_at=_parse_iso(row["created_at"]),  # type: ignore[arg-type]
-                    next_retry_at=_parse_iso(row["next_retry_at"]),
-                    last_error=row["last_error"],
-                )
-            )
+        if not rows:
+            return []
+
+        # Batch-update all fetched rows to 'processing' in one statement
+        ids = [row["id"] for row in rows]
+        placeholders = ",".join("?" for _ in ids)
+        await db.execute(
+            f"UPDATE queue_items SET status = 'processing', updated_at = ? WHERE id IN ({placeholders})",
+            [now, *ids],
+        )
         await db.commit()
-        return items
+
+        return [
+            QueueItem(
+                id=row["id"],
+                message=_deserialize_outbound(row["message_json"]),
+                channel=row["channel"],
+                priority=row["priority"],
+                status="processing",
+                retries=row["retries"],
+                created_at=_parse_iso(row["created_at"]),  # type: ignore[arg-type]
+                next_retry_at=_parse_iso(row["next_retry_at"]),
+                last_error=row["last_error"],
+            )
+            for row in rows
+        ]
 
     async def ack(self, item_id: str) -> None:
         """Acknowledge successful delivery."""

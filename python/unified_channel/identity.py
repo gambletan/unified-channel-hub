@@ -179,23 +179,33 @@ class IdentityRouter:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def connect_all(self) -> None:
-        """Connect all registered adapters."""
-        for iid, adapter in self._adapters.items():
-            try:
-                await adapter.connect()
-                logger.info("connected identity %s", iid)
-            except Exception:
+        """Connect all registered adapters in parallel."""
+        async def _connect_one(iid: str, adapter: ChannelAdapter) -> None:
+            await adapter.connect()
+            logger.info("connected identity %s", iid)
+
+        results = await asyncio.gather(
+            *(_connect_one(iid, a) for iid, a in self._adapters.items()),
+            return_exceptions=True,
+        )
+        # Raise the first failure
+        for iid, result in zip(self._adapters, results):
+            if isinstance(result, Exception):
                 logger.exception("failed to connect identity %s", iid)
-                raise
+                raise result
 
     async def disconnect_all(self) -> None:
-        """Disconnect all registered adapters."""
-        for iid, adapter in self._adapters.items():
+        """Disconnect all registered adapters in parallel."""
+        async def _disconnect_one(iid: str, adapter: ChannelAdapter) -> None:
             try:
                 await adapter.disconnect()
                 logger.info("disconnected identity %s", iid)
             except Exception:
                 logger.exception("error disconnecting identity %s", iid)
+
+        await asyncio.gather(
+            *(_disconnect_one(iid, a) for iid, a in self._adapters.items())
+        )
 
     def get_identities(self, channel: str | None = None) -> list[str]:
         """List registered identity IDs, optionally filtered by channel type."""
@@ -207,15 +217,18 @@ class IdentityRouter:
         ]
 
     async def get_status_all(self) -> dict[str, ChannelStatus]:
-        """Get status of all registered identities."""
-        statuses: dict[str, ChannelStatus] = {}
-        for iid, adapter in self._adapters.items():
+        """Get status of all registered identities (parallel)."""
+        async def _safe_status(iid: str, adapter: ChannelAdapter) -> tuple[str, ChannelStatus]:
             try:
-                statuses[iid] = await adapter.get_status()
+                return iid, await adapter.get_status()
             except Exception as e:
-                statuses[iid] = ChannelStatus(
+                return iid, ChannelStatus(
                     connected=False,
                     channel=self._channel_from_id(iid),
                     error=str(e),
                 )
-        return statuses
+
+        results = await asyncio.gather(
+            *(_safe_status(iid, a) for iid, a in self._adapters.items())
+        )
+        return dict(results)

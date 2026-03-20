@@ -22,6 +22,7 @@ class _CommandEntry:
     handler: Callable[..., Awaitable[str]]
     description: str
     params: list[str]
+    wants_msg: bool = False  # cached: does handler accept (args, msg)?
 
 
 class ServiceBridge:
@@ -61,9 +62,14 @@ class ServiceBridge:
         - ``def handler(args: list[str]) -> str``  (sync, auto-wrapped)
         """
         wrapped = self._wrap_handler(handler)
-        entry = _CommandEntry(handler=wrapped, description=description, params=params or [])
+        entry = _CommandEntry(
+            handler=wrapped,
+            description=description,
+            params=params or [],
+            wants_msg=self._wants_msg(wrapped),
+        )
         self._commands[name] = entry
-        self._middleware.register(name, self._make_command_callback(name, wrapped))
+        self._middleware.register(name, self._make_command_callback(name, entry))
 
     def expose_status(self, handler: Callable[..., Any]) -> None:
         """Register a status check, auto-mapped to /status."""
@@ -83,9 +89,14 @@ class ServiceBridge:
 
     def _register_builtin(self, name: str, handler: Callable[..., Awaitable[str]], description: str) -> None:
         """Register a built-in command (help, etc.)."""
-        entry = _CommandEntry(handler=handler, description=description, params=[])
+        entry = _CommandEntry(
+            handler=handler,
+            description=description,
+            params=[],
+            wants_msg=self._wants_msg(handler),
+        )
         self._commands[name] = entry
-        self._middleware.register(name, self._make_command_callback(name, handler))
+        self._middleware.register(name, self._make_command_callback(name, entry))
 
     def _wrap_handler(self, handler: Callable[..., Any]) -> Callable[..., Awaitable[str]]:
         """Wrap sync handlers to async; detect signature to pass (args) or (args, msg)."""
@@ -137,21 +148,21 @@ class ServiceBridge:
         return positional, flags
 
     def _make_command_callback(
-        self, name: str, handler: Callable[..., Awaitable[str]]
+        self, name: str, entry: _CommandEntry
     ) -> Callable[[UnifiedMessage], Awaitable[str | None]]:
         """Create the CommandMiddleware-compatible callback for a command."""
+        handler = entry.handler
+        pass_msg = entry.wants_msg  # cached at registration time
 
         async def callback(msg: UnifiedMessage) -> str | None:
             try:
                 raw_args = msg.content.args or []
                 positional, flags = self._parse_args(raw_args)
-                # Merge flags into positional for handlers that just take args
                 all_args = positional
                 if flags:
-                    # Attach flags as metadata so advanced handlers can use them
                     msg.metadata["_flags"] = flags
 
-                if self._wants_msg(handler):
+                if pass_msg:
                     return await handler(all_args, msg)
                 else:
                     return await handler(all_args)

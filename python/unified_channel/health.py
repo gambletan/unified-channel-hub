@@ -24,6 +24,8 @@ class HealthMonitor:
     - Exponential backoff per channel on repeated reconnect failures
       (30 s -> 60 s -> 120 s -> max 300 s).
     - Backoff resets once a channel is healthy again.
+    - Reconnection runs in per-channel background tasks so one slow
+      channel never blocks checks on the others.
 
     Usage::
 
@@ -38,6 +40,8 @@ class HealthMonitor:
         self._task: asyncio.Task | None = None
         # Per-channel backoff state: consecutive failure count
         self._failures: dict[str, int] = {}
+        # Per-channel reconnect tasks (so backoff sleeps don't block the loop)
+        self._reconnect_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self, manager: ChannelManager) -> None:
         """Start the background health-check loop."""
@@ -60,6 +64,12 @@ class HealthMonitor:
         except asyncio.CancelledError:
             pass
         self._task = None
+        # Cancel any in-flight reconnect tasks
+        for t in self._reconnect_tasks.values():
+            t.cancel()
+        if self._reconnect_tasks:
+            await asyncio.gather(*self._reconnect_tasks.values(), return_exceptions=True)
+        self._reconnect_tasks.clear()
         logger.info("health monitor stopped")
 
     # ------------------------------------------------------------------
@@ -73,24 +83,29 @@ class HealthMonitor:
             pass
 
     async def _check_all(self, manager: ChannelManager) -> None:
+        # Purge completed reconnect tasks
+        done = [cid for cid, t in self._reconnect_tasks.items() if t.done()]
+        for cid in done:
+            del self._reconnect_tasks[cid]
+
         for channel_id, adapter in manager._channels.items():
+            # Skip channels already being reconnected
+            if channel_id in self._reconnect_tasks:
+                continue
+
             try:
                 status = await adapter.get_status()
                 if status.connected:
-                    # Healthy — reset backoff
                     if channel_id in self._failures:
-                        logger.info(
-                            "channel %s recovered", channel_id
-                        )
+                        logger.info("channel %s recovered", channel_id)
                         self._failures.pop(channel_id, None)
                     continue
 
-                # Not connected — attempt reconnect
+                # Not connected — spawn a background reconnect task
                 failures = self._failures.get(channel_id, 0)
                 backoff = min(
                     _MIN_INTERVAL * (2 ** failures), _MAX_INTERVAL
                 )
-
                 logger.warning(
                     "channel %s not connected (failures=%d), "
                     "reconnecting in %.0fs...",
@@ -98,8 +113,10 @@ class HealthMonitor:
                     failures,
                     backoff,
                 )
-                await asyncio.sleep(backoff)
-                await self._reconnect(channel_id, adapter)
+                self._reconnect_tasks[channel_id] = asyncio.create_task(
+                    self._delayed_reconnect(channel_id, adapter, backoff),
+                    name=f"reconnect:{channel_id}",
+                )
 
             except asyncio.CancelledError:
                 raise
@@ -110,6 +127,14 @@ class HealthMonitor:
                 self._failures[channel_id] = (
                     self._failures.get(channel_id, 0) + 1
                 )
+
+    async def _delayed_reconnect(self, channel_id: str, adapter, backoff: float) -> None:
+        """Sleep for backoff, then attempt reconnect — runs as independent task."""
+        try:
+            await asyncio.sleep(backoff)
+            await self._reconnect(channel_id, adapter)
+        except asyncio.CancelledError:
+            pass
 
     async def _reconnect(self, channel_id: str, adapter) -> None:
         try:
