@@ -113,3 +113,105 @@ async def test_long_subject_truncated(db):
     await mw.process(FakeMessage(text=long_text), handler)
     ticket = await db.find_ticket_by_chat("telegram", "123")
     assert len(ticket.subject) <= 53  # 50 + "..."
+
+
+# ---------------------------------------------------------------------------
+# TopicBridge: webchat offline redelivery (agent reply → user)
+# ---------------------------------------------------------------------------
+from unittest.mock import MagicMock
+from support.tickets.topic_bridge import TopicBridgeMiddleware
+
+
+def _make_bridge(db, send_fn=None):
+    tg = MagicMock()
+    tg._app.bot = AsyncMock()
+    router = MagicMock()
+    bridge = TopicBridgeMiddleware(
+        db, tg, group_chat_id=-100, router=router, agent_ids={"a1"}, send_fn=send_fn,
+    )
+    return bridge
+
+
+@pytest.mark.asyncio
+async def test_deliver_agent_reply_online_marks_delivered(db):
+    """When the customer's channel accepts the message, it's stored delivered + acked ✅."""
+    sent = []
+    async def send_fn(channel, chat_id, text):
+        sent.append((channel, chat_id, text))
+        return "ok"  # non-None = delivered
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+
+    delivered = await bridge._deliver_agent_reply(
+        customer_chat_id="s1", customer_channel="webchat",
+        text="hello there", sender_id="a1", thread_id=5,
+    )
+
+    assert delivered is True
+    assert sent == [("webchat", "s1", "hello there")]
+    msgs = await db.get_messages(t.id)
+    assert msgs[-1].role == "agent" and msgs[-1].delivered is True
+    ack = bridge.bot.send_message.call_args.kwargs["text"]
+    assert "✅" in ack
+
+
+@pytest.mark.asyncio
+async def test_deliver_agent_reply_offline_queues_no_false_ack(db):
+    """When the webchat socket is gone (send_fn → None), store delivered=False and ack ⚠️, not ✅."""
+    async def send_fn(channel, chat_id, text):
+        return None  # delivery failed — socket not found or closed
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+
+    delivered = await bridge._deliver_agent_reply(
+        customer_chat_id="s1", customer_channel="webchat",
+        text="are you there?", sender_id="a1", thread_id=5,
+    )
+
+    assert delivered is False
+    pending = await db.get_undelivered_agent_messages(t.id)
+    assert [m.content for m in pending] == ["are you there?"]
+    ack = bridge.bot.send_message.call_args.kwargs["text"]
+    assert "✅" not in ack and "⚠️" in ack
+
+
+@pytest.mark.asyncio
+async def test_flush_redelivers_pending_on_reconnect(db):
+    """When the customer reconnects, queued agent replies are sent and marked delivered."""
+    sent = []
+    async def send_fn(channel, chat_id, text):
+        sent.append(text)
+        return "ok"
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="reply 1", delivered=False))
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="reply 2", delivered=False))
+
+    n = await bridge.flush_pending_for_customer("s1")
+
+    assert n == 2
+    assert sent == ["reply 1", "reply 2"]
+    assert await db.get_undelivered_agent_messages(t.id) == []
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_messages_when_still_offline(db):
+    """If redelivery still fails, messages stay queued (not lost)."""
+    async def send_fn(channel, chat_id, text):
+        return None
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="still waiting", delivered=False))
+
+    n = await bridge.flush_pending_for_customer("s1")
+
+    assert n == 0
+    assert len(await db.get_undelivered_agent_messages(t.id)) == 1

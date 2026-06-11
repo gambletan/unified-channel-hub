@@ -97,6 +97,48 @@ async def test_add_and_get_messages(db):
 
 
 @pytest.mark.asyncio
+async def test_message_delivered_defaults_true(db):
+    """Messages are delivered=True unless explicitly marked otherwise."""
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(ticket_id=t.id, role="customer", content="Hi"))
+
+    msgs = await db.get_messages(t.id)
+    assert msgs[0].delivered is True
+
+
+@pytest.mark.asyncio
+async def test_get_undelivered_agent_messages(db):
+    """Only agent messages with delivered=False are returned, in order."""
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    # customer + delivered agent msg should NOT appear
+    await db.add_message(TicketMessage(ticket_id=t.id, role="customer", content="Hi"))
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="delivered one", delivered=True))
+    # two undelivered agent msgs SHOULD appear, oldest first
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="pending 1", delivered=False))
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="pending 2", delivered=False))
+
+    pending = await db.get_undelivered_agent_messages(t.id)
+    assert [m.content for m in pending] == ["pending 1", "pending 2"]
+
+
+@pytest.mark.asyncio
+async def test_mark_messages_delivered(db):
+    """Marking messages delivered removes them from the undelivered set."""
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="p1", delivered=False))
+    await db.add_message(TicketMessage(ticket_id=t.id, role="agent", content="p2", delivered=False))
+
+    pending = await db.get_undelivered_agent_messages(t.id)
+    assert len(pending) == 2
+
+    await db.mark_messages_delivered([m.id for m in pending])
+    assert await db.get_undelivered_agent_messages(t.id) == []
+
+
+@pytest.mark.asyncio
 async def test_agent_crud(db):
     agent = Agent(id="a1", name="Bob", channel="slack", chat_id="S123", status=AgentStatus.ONLINE)
     await db.upsert_agent(agent)

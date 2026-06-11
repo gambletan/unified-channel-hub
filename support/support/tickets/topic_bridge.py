@@ -92,18 +92,103 @@ class TopicBridgeMiddleware(Middleware):
     def bot(self):
         return self.tg._app.bot
 
-    async def _send_to_customer(self, customer_chat_id: str, text: str, **kwargs) -> None:
-        """Send message to customer via their original channel."""
+    async def _send_to_customer(self, customer_chat_id: str, text: str, **kwargs) -> bool:
+        """Send a message to the customer via their original channel.
+
+        Returns True if the message was actually delivered, False if it could
+        not be (e.g. a webchat customer whose socket is closed). This is what
+        lets the bridge queue undelivered replies instead of silently dropping
+        them and falsely reporting success.
+        """
         channel = self._customer_channel.get(customer_chat_id, "telegram")
         if channel == "telegram":
             try:
                 await self.bot.send_message(chat_id=int(customer_chat_id), text=text, **kwargs)
+                return True
             except (ValueError, TypeError):
                 logger.error("Invalid telegram chat_id (non-numeric): %s", customer_chat_id)
+                return False
+            except Exception as e:
+                logger.warning("telegram send to %s failed: %s", customer_chat_id, e)
+                return False
         elif self._send_fn:
-            await self._send_fn(channel, customer_chat_id, text)
+            # ChannelManager.send() returns the adapter's result: a truthy id on
+            # success, None when the adapter could not deliver (webchat: socket
+            # not found or closed).
+            result = await self._send_fn(channel, customer_chat_id, text)
+            return result is not None
         else:
             logger.warning("No send_fn for channel %s, cannot send to %s", channel, customer_chat_id)
+            return False
+
+    async def _deliver_agent_reply(
+        self,
+        customer_chat_id: str,
+        customer_channel: str,
+        text: str,
+        sender_id: str,
+        thread_id: int,
+        send_text: str | None = None,
+    ) -> bool:
+        """Forward an agent's reply to the customer, persisting delivery status.
+
+        On success: stores the message delivered=True and acks "✅ 已发送给用户".
+        On failure (customer offline): stores delivered=False so it can be flushed
+        on reconnect, and acks "⚠️ ...离线" — never a false ✅.
+        """
+        delivered = await self._send_to_customer(customer_chat_id, send_text if send_text is not None else text)
+
+        ticket = await self.db.find_ticket_by_chat(customer_channel, customer_chat_id)
+        if ticket:
+            await self.db.add_message(TicketMessage(
+                ticket_id=ticket.id,
+                role="agent",
+                sender_id=sender_id,
+                content=text,
+                channel=customer_channel,
+                from_id=sender_id,
+                to_id=ticket.customer_id,
+                delivered=delivered,
+            ))
+
+        ack = "✅ 已发送给用户" if delivered else "⚠️ 用户当前离线，重新连接后将自动送达"
+        try:
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=thread_id,
+                text=ack,
+            )
+        except Exception:
+            pass
+
+        if delivered:
+            logger.info("Agent %s reply forwarded to %s", sender_id, customer_chat_id)
+        else:
+            logger.warning("Agent %s reply queued — customer %s offline", sender_id, customer_chat_id)
+        return delivered
+
+    async def flush_pending_for_customer(self, customer_chat_id: str) -> int:
+        """Redeliver any queued agent replies to a customer who just (re)connected.
+
+        Returns the number of messages successfully delivered.
+        """
+        channel = self._customer_channel.get(customer_chat_id, "telegram")
+        ticket = await self.db.find_ticket_by_chat(channel, customer_chat_id)
+        if not ticket:
+            return 0
+        pending = await self.db.get_undelivered_agent_messages(ticket.id)
+        if not pending:
+            return 0
+        delivered_ids: list[int] = []
+        for m in pending:
+            if await self._send_to_customer(customer_chat_id, m.content):
+                delivered_ids.append(m.id)
+            else:
+                break  # still offline — stop, keep order for next attempt
+        await self.db.mark_messages_delivered(delivered_ids)
+        if delivered_ids:
+            logger.info("Flushed %d queued repl(ies) to %s", len(delivered_ids), customer_chat_id)
+        return len(delivered_ids)
 
     async def process(self, msg: UnifiedMessage, next_handler: Handler) -> Any:
         chat_id = msg.chat_id or ""
@@ -374,6 +459,13 @@ class TopicBridgeMiddleware(Middleware):
 
         # Remember which channel this customer came from
         self._customer_channel[chat_id] = channel
+
+        # Customer is connected again (they just sent a message) — redeliver any
+        # agent replies that were queued while their socket was offline.
+        try:
+            await self.flush_pending_for_customer(chat_id)
+        except Exception as e:
+            logger.warning("flush_pending_for_customer(%s) failed: %s", chat_id, e)
 
         topic_id = await self._get_or_create_topic(chat_id, customer_name, channel)
 
@@ -654,29 +746,19 @@ class TopicBridgeMiddleware(Middleware):
                 except Exception:
                     pass
 
-        # Forward to customer (via their original channel)
+        # Forward to customer (via their original channel). Persists delivery
+        # status: delivered=True acks ✅, an offline webchat customer gets the
+        # reply queued (delivered=False) + ⚠️ ack, flushed on reconnect.
         customer_channel = self._customer_channel.get(customer_chat_id, "telegram")
         try:
-            await self._send_to_customer(customer_chat_id, send_text)
-            # Store agent message via DB layer
-            ticket = await self.db.find_ticket_by_chat(customer_channel, customer_chat_id)
-            if ticket:
-                await self.db.add_message(TicketMessage(
-                    ticket_id=ticket.id,
-                    role="agent",
-                    sender_id=sender_id,
-                    content=text,
-                    channel=customer_channel,
-                    from_id=sender_id,
-                    to_id=ticket.customer_id,
-                ))
-
-            await self.bot.send_message(
-                chat_id=self.group_chat_id,
-                message_thread_id=thread_id,
-                text="✅ 已发送给用户",
+            await self._deliver_agent_reply(
+                customer_chat_id=customer_chat_id,
+                customer_channel=customer_channel,
+                text=text,
+                sender_id=sender_id,
+                thread_id=thread_id,
+                send_text=send_text,
             )
-            logger.info("Agent %s reply forwarded to %s", sender_id, customer_chat_id)
         except Exception as e:
             logger.error("Failed to forward to customer %s: %s", customer_chat_id, e)
             try:
@@ -1025,9 +1107,19 @@ class TopicBridgeMiddleware(Middleware):
             # Create topic immediately with default color, update later if needed
             _TOPIC_COLOR_GUEST = 7322096       # blue
 
+            _channel_icons = {
+                "telegram": "✈️",
+                "whatsapp": "💬",
+                "webchat": "🌐",
+                "discord": "🎮",
+                "line": "🟢",
+                "wechat": "💚",
+                "slack": "⚡",
+            }
+            ch_icon = _channel_icons.get(channel, "👤")
             topic = await self.bot.create_forum_topic(
                 chat_id=self.group_chat_id,
-                name=f"👤 {customer_name}",
+                name=f"{ch_icon} {customer_name}",
                 icon_color=_TOPIC_COLOR_GUEST,
             )
             thread_id = topic.message_thread_id
