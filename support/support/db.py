@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS ticket_messages (
     channel TEXT,
     from_id TEXT,
     to_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    delivered INTEGER DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ticket ON ticket_messages(ticket_id);
 
@@ -161,6 +162,7 @@ class Database:
             ("topic_mappings", "channel", "ALTER TABLE topic_mappings ADD COLUMN channel TEXT DEFAULT 'telegram'"),
             ("ticket_messages", "from_id", "ALTER TABLE ticket_messages ADD COLUMN from_id TEXT"),
             ("ticket_messages", "to_id", "ALTER TABLE ticket_messages ADD COLUMN to_id TEXT"),
+            ("ticket_messages", "delivered", "ALTER TABLE ticket_messages ADD COLUMN delivered INTEGER DEFAULT 1"),
         ]
         for table, column, sql in migrations:
             try:
@@ -306,9 +308,9 @@ class Database:
 
     async def add_message(self, msg: TicketMessage, *, commit: bool = True) -> TicketMessage:
         async with self.db.execute(
-            """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, from_id, to_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, msg.from_id, msg.to_id, _iso(msg.created_at)),
+            """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, from_id, to_id, created_at, delivered)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, msg.from_id, msg.to_id, _iso(msg.created_at), 1 if msg.delivered else 0),
         ) as cur:
             msg.id = cur.lastrowid or 0
         if commit:
@@ -353,9 +355,43 @@ class Database:
                     from_id=r["from_id"] if "from_id" in r.keys() else None,
                     to_id=r["to_id"] if "to_id" in r.keys() else None,
                     created_at=_parse_dt(r["created_at"]),
+                    delivered=bool(r["delivered"]) if "delivered" in r.keys() else True,
                 )
                 for r in rows
             ]
+
+    async def get_undelivered_agent_messages(self, ticket_id: str) -> list[TicketMessage]:
+        """Agent replies not yet delivered to the customer, oldest first."""
+        async with self.db.execute(
+            """SELECT * FROM ticket_messages
+               WHERE ticket_id = ? AND role = 'agent' AND delivered = 0
+               ORDER BY created_at ASC, id ASC""",
+            (ticket_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [
+                TicketMessage(
+                    id=r["id"], ticket_id=r["ticket_id"], role=r["role"],
+                    sender_id=r["sender_id"], sender_name=r["sender_name"],
+                    content=r["content"], channel=r["channel"],
+                    from_id=r["from_id"] if "from_id" in r.keys() else None,
+                    to_id=r["to_id"] if "to_id" in r.keys() else None,
+                    created_at=_parse_dt(r["created_at"]),
+                    delivered=False,
+                )
+                for r in rows
+            ]
+
+    async def mark_messages_delivered(self, message_ids: list[int]) -> None:
+        """Mark the given message ids as delivered."""
+        if not message_ids:
+            return
+        placeholders = ",".join("?" for _ in message_ids)
+        await self.db.execute(
+            f"UPDATE ticket_messages SET delivered = 1 WHERE id IN ({placeholders})",
+            tuple(message_ids),
+        )
+        await self.db.commit()
 
     # ── Agents ──
 
