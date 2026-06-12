@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, AsyncIterator, Callable, Coroutine, Protocol
 
 import httpx
@@ -14,6 +15,71 @@ logger = logging.getLogger(__name__)
 
 # Callback type: async fn(chunk_text, full_text_so_far)
 StreamCallback = Callable[[str, str], Coroutine[Any, Any, None]]
+
+
+# --- reasoning (<think>) stripping -------------------------------------------
+# Reasoning models (e.g. MiniMax-M2.7) emit chain-of-thought inline as
+# <think>...</think> in the response content. Customers must never see it.
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+_THINK_TAGS = ("<think>", "</think>")
+
+
+def strip_think(text: str) -> str:
+    """Remove complete <think>...</think> blocks (and any unclosed trailing one)."""
+    s = _THINK_BLOCK.sub("", text)
+    idx = s.find("<think>")
+    if idx != -1:
+        s = s[:idx]
+    return s.strip()
+
+
+def _hold_partial_tag(s: str) -> str:
+    """Trim a trailing fragment that could be the start of a <think>/<​/think> tag,
+    so a half-arrived tag is never emitted mid-stream."""
+    best = 0
+    for tag in _THINK_TAGS:
+        for k in range(min(len(s), len(tag) - 1), 0, -1):
+            if s.endswith(tag[:k]):
+                best = max(best, k)
+                break
+    return s[:-best] if best else s
+
+
+class ThinkStreamFilter:
+    """Stateful filter that suppresses <think>...</think> from a streamed reply,
+    correctly handling tags split across chunks. feed() returns the new clean
+    delta to emit; flush() returns any remainder after the stream ends."""
+
+    def __init__(self) -> None:
+        self._raw = ""
+        self._emitted = 0
+
+    def _clean(self, streaming: bool) -> str:
+        s = _THINK_BLOCK.sub("", self._raw)
+        idx = s.find("<think>")
+        if idx != -1:          # unclosed think block — drop it and everything after
+            s = s[:idx]
+        if streaming:
+            s = _hold_partial_tag(s)
+        return s.lstrip()       # drop leading whitespace left by a removed leading block
+
+    def feed(self, chunk: str) -> str:
+        self._raw += chunk
+        clean = self._clean(streaming=True)
+        delta = clean[self._emitted:]
+        self._emitted = len(clean)
+        return delta
+
+    def flush(self) -> str:
+        clean = self._clean(streaming=False)
+        delta = clean[self._emitted:]
+        self._emitted = len(clean)
+        return delta
+
+    @property
+    def text(self) -> str:
+        return self._clean(streaming=False)
 
 
 class LLMBackend(Protocol):
@@ -122,7 +188,7 @@ class OpenAICompatibleBackend:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return strip_think(data["choices"][0]["message"]["content"])
 
     async def stream(
         self,
@@ -138,7 +204,7 @@ class OpenAICompatibleBackend:
             all_messages.append({"role": "system", "content": system_prompt})
         all_messages.extend(messages)
 
-        full_text = ""
+        think = ThinkStreamFilter()   # suppress <think>...</think> from the live stream
         async with self._client.stream(
             "POST",
             f"{self.base_url}/chat/completions",
@@ -162,13 +228,16 @@ class OpenAICompatibleBackend:
                     delta = chunk["choices"][0].get("delta", {})
                     content = delta.get("content", "")
                     if content:
-                        full_text += content
-                        if on_chunk:
-                            await on_chunk(content, full_text)
+                        clean = think.feed(content)
+                        if clean and on_chunk:
+                            await on_chunk(clean, think.text)
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
-        return full_text
+        tail = think.flush()
+        if tail and on_chunk:
+            await on_chunk(tail, think.text)
+        return think.text
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -212,7 +281,7 @@ class AnthropicBackend:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["content"][0]["text"]
+        return strip_think(data["content"][0]["text"])
 
     async def stream(
         self,
@@ -233,7 +302,7 @@ class AnthropicBackend:
         if system_prompt:
             body["system"] = system_prompt
 
-        full_text = ""
+        think = ThinkStreamFilter()
         async with self._client.stream(
             "POST",
             "https://api.anthropic.com/v1/messages",
@@ -248,15 +317,18 @@ class AnthropicBackend:
                     if event.get("type") == "content_block_delta":
                         content = event.get("delta", {}).get("text", "")
                         if content:
-                            full_text += content
-                            if on_chunk:
-                                await on_chunk(content, full_text)
+                            clean = think.feed(content)
+                            if clean and on_chunk:
+                                await on_chunk(clean, think.text)
                     elif event.get("type") == "message_stop":
                         break
                 except (json.JSONDecodeError, KeyError):
                     continue
 
-        return full_text
+        tail = think.flush()
+        if tail and on_chunk:
+            await on_chunk(tail, think.text)
+        return think.text
 
     async def close(self) -> None:
         await self._client.aclose()
