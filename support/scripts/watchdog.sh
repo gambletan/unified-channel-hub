@@ -27,12 +27,24 @@ alert(){  # $1 = text — reads bot token from config.yaml at runtime (never log
        --data-urlencode text="$1" >/dev/null 2>&1 || log "alert send failed"
 }
 
+# Debounced port probe: a real TCP connect, retried 3x (2s apart). Only counts
+# as down if ALL attempts fail — so a transient blip under host load (the host
+# runs a memory-heavy mariadb, load avg ~8) does NOT trigger a needless restart.
+port_down(){
+  local p="$1" i
+  for i in 1 2 3; do
+    (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && { exec 3>&- 3<&- 2>/dev/null; return 1; }
+    sleep 2
+  done
+  return 0
+}
+
 # ---- probe ----
 problems=()
 active="$(systemctl is-active "$UNIT" 2>/dev/null || true)"
 [ "$active" = "active" ] || problems+=("systemd=$active")
 for p in 8081 8082 8443; do
-  ss -ltn 2>/dev/null | grep -q ":$p " || problems+=("port${p}-down")
+  port_down "$p" && problems+=("port${p}-down")
 done
 
 # crash-loop detection: NRestarts climbing fast between runs
