@@ -323,6 +323,9 @@ class WebChatAdapter(ChannelAdapter):
                 type=ContentType.TEXT,
                 text=text,
             )
+        elif msg_type in ("heartbeat", "ping", "pong", "ack"):
+            # Client keepalive / control frames — ignore silently (not a dropped message).
+            return None
         else:
             # Diagnostic: reveal the shape of anything we drop (e.g. an image sent in an
             # unexpected format) without dumping large base64 payloads.
