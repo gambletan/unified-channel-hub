@@ -366,3 +366,16 @@ async def test_detect_language_mixed_chinese_is_zh(db):
     # kana → Japanese, hangul → Korean still take priority over Han chars
     assert await bridge._detect_language("こんにちは、注文") == "ja"
     assert await bridge._detect_language("안녕하세요") == "ko"
+
+
+@pytest.mark.asyncio
+async def test_send_to_customer_strips_residual_think(db):
+    """Defense-in-depth: any residual <think> is stripped before reaching the customer."""
+    sent = []
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
+        sent.append(text); return "ok"
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    ok = await bridge._send_to_customer("s1", "<think>internal reasoning</think>Your order shipped.")
+    assert ok is True
+    assert sent == ["Your order shipped."]

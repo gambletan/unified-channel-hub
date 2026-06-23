@@ -23,6 +23,7 @@ from unified_channel import Middleware, UnifiedMessage
 from unified_channel.adapters.telegram import TelegramAdapter
 from unified_channel.types import ContentType
 
+from ..ai.backends import strip_think
 from ..ai.model_router import ModelRouter
 from ..db import Database
 from ..models import TicketMessage, TicketStatus
@@ -94,6 +95,19 @@ class TopicBridgeMiddleware(Middleware):
     def bot(self):
         return self.tg._app.bot
 
+    async def _alert_think_leak(self) -> None:
+        """Alert the agent group (once per process) that a <think> leak was caught + stripped."""
+        if getattr(self, "_think_leak_alerted", False):
+            return
+        self._think_leak_alerted = True
+        try:
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                text="⚠️ [自检] 检测到发给用户的回复残留模型思考(<think>)，已自动剥离。某条模型路径未过滤，请排查。",
+            )
+        except Exception:
+            pass
+
     async def _send_to_customer(
         self,
         customer_chat_id: str,
@@ -110,6 +124,14 @@ class TopicBridgeMiddleware(Middleware):
         lets the bridge queue undelivered replies instead of silently dropping
         them and falsely reporting success.
         """
+        # Defense-in-depth: a customer must NEVER see model reasoning. If any path
+        # leaked <think>, strip it here and alert (once) — it signals a regression
+        # in a model-call path that should have stripped it.
+        if text and "<think>" in text:
+            logger.warning("stripped residual <think> from customer reply to %s", customer_chat_id)
+            text = strip_think(text)
+            await self._alert_think_leak()
+
         channel = self._customer_channel.get(customer_chat_id, "telegram")
         if channel == "telegram":
             try:
