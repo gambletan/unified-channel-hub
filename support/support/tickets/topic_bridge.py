@@ -734,10 +734,11 @@ class TopicBridgeMiddleware(Middleware):
         if text:
             media_label += f" {display_text}"
 
-        # Voice/audio → transcribe + translate to the agents' language (best-effort,
-        # never blocks the audio forward below).
+        # Voice/audio → transcribe + translate to the agents' language. Fire-and-forget
+        # (like _send_translation / _send_ai_translation) so the Gemini call never delays
+        # the audio forward below.
         if media_type in ("voice", "audio") and self._voice_translator:
-            await self._post_voice_translation(msg, topic_id)
+            asyncio.create_task(self._post_voice_translation(msg, topic_id))
 
         # --- Telegram native forward ---
         tg_msg = None

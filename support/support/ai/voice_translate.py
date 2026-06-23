@@ -74,7 +74,15 @@ class GeminiVoiceTranslator:
         try:
             obj = json.loads(s)
         except (json.JSONDecodeError, ValueError, TypeError):
-            return None
+            # Lenient fallback: the model occasionally wraps the JSON in prose —
+            # grab the outermost {...} and try again.
+            start, end = s.find("{"), s.rfind("}")
+            if start == -1 or end <= start:
+                return None
+            try:
+                obj = json.loads(s[start:end + 1])
+            except (json.JSONDecodeError, ValueError, TypeError):
+                return None
         transcript = obj.get("transcript") if isinstance(obj, dict) else None
         translation = obj.get("translation") if isinstance(obj, dict) else None
         if not transcript or not translation:
