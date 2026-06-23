@@ -136,7 +136,7 @@ def _make_bridge(db, send_fn=None):
 async def test_deliver_agent_reply_online_marks_delivered(db):
     """When the customer's channel accepts the message, it's stored delivered + acked ✅."""
     sent = []
-    async def send_fn(channel, chat_id, text):
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
         sent.append((channel, chat_id, text))
         return "ok"  # non-None = delivered
     bridge = _make_bridge(db, send_fn=send_fn)
@@ -160,7 +160,7 @@ async def test_deliver_agent_reply_online_marks_delivered(db):
 @pytest.mark.asyncio
 async def test_deliver_agent_reply_offline_queues_no_false_ack(db):
     """When the webchat socket is gone (send_fn → None), store delivered=False and ack ⚠️, not ✅."""
-    async def send_fn(channel, chat_id, text):
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
         return None  # delivery failed — socket not found or closed
     bridge = _make_bridge(db, send_fn=send_fn)
     bridge._customer_channel["s1"] = "webchat"
@@ -183,7 +183,7 @@ async def test_deliver_agent_reply_offline_queues_no_false_ack(db):
 async def test_flush_redelivers_pending_on_reconnect(db):
     """When the customer reconnects, queued agent replies are sent and marked delivered."""
     sent = []
-    async def send_fn(channel, chat_id, text):
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
         sent.append(text)
         return "ok"
     bridge = _make_bridge(db, send_fn=send_fn)
@@ -203,7 +203,7 @@ async def test_flush_redelivers_pending_on_reconnect(db):
 @pytest.mark.asyncio
 async def test_flush_keeps_messages_when_still_offline(db):
     """If redelivery still fails, messages stay queued (not lost)."""
-    async def send_fn(channel, chat_id, text):
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
         return None
     bridge = _make_bridge(db, send_fn=send_fn)
     bridge._customer_channel["s1"] = "webchat"
@@ -215,3 +215,94 @@ async def test_flush_keeps_messages_when_still_offline(db):
 
     assert n == 0
     assert len(await db.get_undelivered_agent_messages(t.id)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Agent → customer MEDIA (photo/video) forwarding + offline queue
+# ---------------------------------------------------------------------------
+
+def _media_bridge(db):
+    """Bridge whose send_fn records media kwargs and is toggled online/offline."""
+    state = {"online": True, "calls": []}
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
+        state["calls"].append({"channel": channel, "chat_id": chat_id, "text": text,
+                               "media_url": media_url, "media_type": media_type, "filename": filename})
+        return "ok" if state["online"] else None
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    return bridge, state
+
+
+@pytest.mark.asyncio
+async def test_deliver_agent_media_online(db):
+    """Agent media to an online webchat customer is sent with media + stored delivered."""
+    bridge, state = _media_bridge(db)
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+
+    delivered = await bridge._deliver_agent_reply(
+        customer_chat_id="s1", customer_channel="webchat", text="look",
+        sender_id="a1", thread_id=7,
+        media_url="data:image/jpeg;base64,ZZZ", media_type="photo", filename="p.jpg",
+    )
+
+    assert delivered is True
+    call = state["calls"][-1]
+    assert call["media_url"] == "data:image/jpeg;base64,ZZZ" and call["media_type"] == "photo"
+    m = (await db.get_messages(t.id))[-1]
+    assert m.media_url == "data:image/jpeg;base64,ZZZ" and m.media_type == "photo" and m.delivered is True
+
+
+@pytest.mark.asyncio
+async def test_deliver_agent_media_offline_queues_with_media(db):
+    """If the customer is offline, the media reply is queued (delivered=False) WITH its media."""
+    bridge, state = _media_bridge(db)
+    state["online"] = False
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+
+    delivered = await bridge._deliver_agent_reply(
+        customer_chat_id="s1", customer_channel="webchat", text="watch",
+        sender_id="a1", thread_id=7,
+        media_url="data:video/mp4;base64,VVV", media_type="video",
+    )
+
+    assert delivered is False
+    pending = await db.get_undelivered_agent_messages(t.id)
+    assert len(pending) == 1
+    assert pending[0].media_url == "data:video/mp4;base64,VVV" and pending[0].media_type == "video"
+
+
+@pytest.mark.asyncio
+async def test_flush_redelivers_media_on_reconnect(db):
+    """On reconnect, a queued media reply is redelivered WITH its media and marked delivered."""
+    bridge, state = _media_bridge(db)
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(
+        ticket_id=t.id, role="agent", content="cap",
+        media_url="data:image/png;base64,PPP", media_type="photo", media_filename="x.png",
+        delivered=False,
+    ))
+
+    n = await bridge.flush_pending_for_customer("s1")
+
+    assert n == 1
+    call = state["calls"][-1]
+    assert call["media_url"] == "data:image/png;base64,PPP"
+    assert call["media_type"] == "photo"
+    assert call["filename"] == "x.png"
+    assert await db.get_undelivered_agent_messages(t.id) == []
+
+
+def test_extract_tg_media_photo_and_video():
+    """The Telegram media extractor maps photo/video to (type, file_id, filename, mime)."""
+    photo_msg = MagicMock(spec=["photo"])
+    photo_msg.photo = [MagicMock(file_id="small"), MagicMock(file_id="big")]
+    assert TopicBridgeMiddleware._extract_tg_media(photo_msg) == ("photo", "big", None, "image/jpeg")
+
+    video_msg = MagicMock(spec=["video"])
+    video_msg.video = MagicMock(file_id="vid1", file_name="clip.mp4", mime_type="video/mp4")
+    assert TopicBridgeMiddleware._extract_tg_media(video_msg) == ("video", "vid1", "clip.mp4", "video/mp4")
+
+    assert TopicBridgeMiddleware._extract_tg_media(None) == (None, None, None, None)

@@ -124,6 +124,36 @@ async def test_get_undelivered_agent_messages(db):
 
 
 @pytest.mark.asyncio
+async def test_message_media_fields_persist(db):
+    """Media url/type/filename round-trip through add_message/get_messages."""
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(
+        ticket_id=t.id, role="agent", content="see this",
+        media_url="data:image/jpeg;base64,AAAA", media_type="photo", media_filename="photo.jpg",
+    ))
+    m = (await db.get_messages(t.id))[-1]
+    assert m.media_url == "data:image/jpeg;base64,AAAA"
+    assert m.media_type == "photo"
+    assert m.media_filename == "photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_undelivered_preserves_media(db):
+    """A queued (offline) agent media message keeps its media for redelivery."""
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
+    await db.create_ticket(t)
+    await db.add_message(TicketMessage(
+        ticket_id=t.id, role="agent", content="watch",
+        media_url="data:video/mp4;base64,BBBB", media_type="video", delivered=False,
+    ))
+    pending = await db.get_undelivered_agent_messages(t.id)
+    assert len(pending) == 1
+    assert pending[0].media_url == "data:video/mp4;base64,BBBB"
+    assert pending[0].media_type == "video"
+
+
+@pytest.mark.asyncio
 async def test_mark_messages_delivered(db):
     """Marking messages delivered removes them from the undelivered set."""
     t = Ticket(channel="webchat", chat_id="s1", customer_id="u1")
