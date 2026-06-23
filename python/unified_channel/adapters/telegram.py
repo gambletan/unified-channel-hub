@@ -100,7 +100,7 @@ class TelegramAdapter(ChannelAdapter):
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text))
         self._app.add_handler(MessageHandler(
             filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO
-            | filters.VIDEO | filters.VIDEO_NOTE | filters.Sticker.ALL,
+            | filters.VIDEO | filters.VIDEO_NOTE | filters.ANIMATION | filters.Sticker.ALL,
             self._on_media,
         ))
         self._app.add_handler(CallbackQueryHandler(self._on_callback))
