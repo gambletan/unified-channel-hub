@@ -171,6 +171,7 @@ class WebChatAdapter(ChannelAdapter):
         ws = web.WebSocketResponse(
             heartbeat=30.0,
             autoping=True,
+            max_msg_size=32 * 1024 * 1024,  # 32MB — base64 images blow past aiohttp's 4MB default
         )
         await ws.prepare(request)
 
@@ -279,6 +280,14 @@ class WebChatAdapter(ChannelAdapter):
                             self._last_activity = datetime.now()
                     except json.JSONDecodeError:
                         logger.debug("webchat invalid JSON from %s", session_id)
+                elif ws_msg.type == web.WSMsgType.BINARY:
+                    # The protocol expects media as JSON {type:'media', data:'<base64 data URI>'}.
+                    # Log binary frames so we can see if a client sends raw image bytes instead.
+                    logger.warning(
+                        "webchat session=%s sent an unhandled BINARY frame (%d bytes); "
+                        "media should be JSON {type:'media', data:'<base64 data URI>'}",
+                        session_id, len(ws_msg.data) if ws_msg.data else 0,
+                    )
                 elif ws_msg.type == web.WSMsgType.ERROR:
                     logger.warning(
                         "webchat ws error session=%s: %s",
@@ -315,6 +324,12 @@ class WebChatAdapter(ChannelAdapter):
                 text=text,
             )
         else:
+            # Diagnostic: reveal the shape of anything we drop (e.g. an image sent in an
+            # unexpected format) without dumping large base64 payloads.
+            logger.warning(
+                "webchat dropped unrecognized message from %s: type=%r keys=%s",
+                session_id, msg_type, sorted(data.keys()),
+            )
             return None
 
         # Build identity from stored user info
