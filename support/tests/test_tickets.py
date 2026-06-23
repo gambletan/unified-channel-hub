@@ -379,3 +379,16 @@ async def test_send_to_customer_strips_residual_think(db):
     ok = await bridge._send_to_customer("s1", "<think>internal reasoning</think>Your order shipped.")
     assert ok is True
     assert sent == ["Your order shipped."]
+
+
+@pytest.mark.asyncio
+async def test_send_to_customer_skips_all_think_reply(db):
+    """A reply that is nothing but <think> strips to empty → don't send a blank message."""
+    sent = []
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
+        sent.append(text); return "ok"
+    bridge = _make_bridge(db, send_fn=send_fn)
+    bridge._customer_channel["s1"] = "webchat"
+    ok = await bridge._send_to_customer("s1", "<think>only reasoning, no answer</think>")
+    assert ok is False
+    assert sent == []
