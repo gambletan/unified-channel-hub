@@ -127,11 +127,21 @@ class ChannelManager:
         if not self._channels:
             raise RuntimeError("no channels registered")
 
-        # Connect all adapters in parallel
-        await asyncio.gather(
-            *(adapter.connect() for adapter in self._channels.values())
+        # Connect all adapters in parallel. A channel that fails to connect (e.g. an
+        # invalid Telegram token) is skipped, not fatal — the others keep running.
+        results = await asyncio.gather(
+            *(adapter.connect() for adapter in self._channels.values()),
+            return_exceptions=True,
         )
-        for adapter in self._channels.values():
+        connected = []
+        for (cid, adapter), res in zip(list(self._channels.items()), results):
+            if isinstance(res, BaseException):
+                logger.error("channel %s failed to connect — skipping: %s", cid, res)
+            else:
+                connected.append(adapter)
+        if not connected:
+            raise RuntimeError("no channels could be connected")
+        for adapter in connected:
             task = asyncio.create_task(
                 self._consume(adapter), name=f"channel:{adapter.channel_id}"
             )
