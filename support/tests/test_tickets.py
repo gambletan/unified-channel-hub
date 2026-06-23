@@ -355,3 +355,14 @@ async def test_agent_voice_sent_to_customer_as_translated_text(db):
     assert vt.transcribe_and_translate.call_args.args[2] == "English"  # customer's language
     assert any(c["text"] == "Hi, shipped" for c in sent)              # got the translation
     assert all(c["media_url"] is None for c in sent)                  # NO audio forwarded
+
+
+@pytest.mark.asyncio
+async def test_detect_language_mixed_chinese_is_zh(db):
+    """Chinese mixed with Latin/numbers must detect as zh, not fall to the Latin-only LLM."""
+    bridge = _make_bridge(db)
+    for s in ["iPhone 15 多少钱", "hello 在吗", "OK 收到了 thanks", "请问 SKU12345 有货吗", "谢谢"]:
+        assert await bridge._detect_language(s) == "zh", s
+    # kana → Japanese, hangul → Korean still take priority over Han chars
+    assert await bridge._detect_language("こんにちは、注文") == "ja"
+    assert await bridge._detect_language("안녕하세요") == "ko"

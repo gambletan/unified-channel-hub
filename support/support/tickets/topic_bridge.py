@@ -1150,19 +1150,21 @@ class TopicBridgeMiddleware(Middleware):
         if not text.strip():
             return self.default_lang
 
-        # Heuristic for non-Latin scripts
-        chinese_ratio = len(re.findall(r'[\u4e00-\u9fff]', text)) / max(len(text), 1)
-        if chinese_ratio > 0.3:
-            return "zh"
-        if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', text):
+        # Script-based detection (reliable; runs before the LLM). A message with ANY
+        # CJK character is Chinese \u2014 the old ratio>0.3 rule let mixed text like
+        # "iPhone 15 \u591a\u5c11\u94b1" slip to the Latin-only LLM, which mis-tagged it as "es".
+        # Check kana/hangul first since Japanese/Korean also use Han characters.
+        if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', text):   # hiragana/katakana \u2192 Japanese
             return "ja"
-        if re.search(r'[\uac00-\ud7af]', text):
+        if re.search(r'[\uac00-\ud7af]', text):                # hangul \u2192 Korean
             return "ko"
-        if re.search(r'[\u0e00-\u0e7f]', text):
+        if re.search(r'[\u4e00-\u9fff]', text):                # any CJK ideograph \u2192 Chinese
+            return "zh"
+        if re.search(r'[\u0e00-\u0e7f]', text):                # Thai
             return "th"
-        if re.search(r'[\u0600-\u06ff]', text):
+        if re.search(r'[\u0600-\u06ff]', text):                # Arabic
             return "ar"
-        if re.search(r'[\u0400-\u04ff]', text):
+        if re.search(r'[\u0400-\u04ff]', text):                # Cyrillic
             return "ru"
 
         # Latin script — short text defaults to English (LLM unreliable on few words)
