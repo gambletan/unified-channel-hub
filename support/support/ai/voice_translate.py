@@ -27,13 +27,18 @@ class GeminiVoiceTranslator:
         self.timeout = timeout
 
     async def transcribe_and_translate(
-        self, audio: bytes, mime: str, target_lang: str
+        self, audio: bytes, mime: str, target_lang: str, source_hint: str | None = None
     ) -> tuple[str, str] | None:
-        """Return (transcript, translation), or None on any failure (caller falls back to audio-only)."""
+        """Return (transcript, translation), or None on any failure (caller falls back to audio-only).
+
+        source_hint biases the transcription language (e.g. "Chinese") to avoid the
+        model mis-hearing one CJK language as another on borderline audio.
+        """
         if not self.api_key:
             return None
+        hint = f"The audio is most likely spoken in {source_hint}. " if source_hint else ""
         prompt = (
-            f"Transcribe the audio in its original language, then translate it to {target_lang}. "
+            f"{hint}Transcribe the audio in its original language, then translate it to {target_lang}. "
             'Return ONLY compact JSON, no prose: '
             '{"transcript":"<original text>","translation":"<' + target_lang + ' text>"}'
         )

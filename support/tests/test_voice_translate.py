@@ -74,3 +74,14 @@ async def test_parses_json_wrapped_in_prose():
         out = await GeminiVoiceTranslator(api_key="k").transcribe_and_translate(
             b"x", "audio/ogg", "English")
     assert out == ("a", "b")
+
+
+@pytest.mark.asyncio
+async def test_source_hint_added_to_prompt():
+    resp = _gemini_resp('{"transcript":"你好","translation":"Hello"}')
+    client = _client_returning(resp)
+    with patch("httpx.AsyncClient", return_value=client):
+        await GeminiVoiceTranslator(api_key="k").transcribe_and_translate(
+            b"x", "audio/ogg", "English", source_hint="Chinese")
+    prompt = client.post.call_args.kwargs["json"]["contents"][0]["parts"][0]["text"]
+    assert "Chinese" in prompt and "most likely" in prompt.lower()
