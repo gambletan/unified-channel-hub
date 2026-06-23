@@ -1,0 +1,10 @@
+# Copy to deploy/Caddyfile and set your domain. Used only with `--profile edge`
+# on fresh hosts that have no existing reverse proxy (Caddy auto-provisions HTTPS,
+# which the WhatsApp Cloud API webhook requires).
+your-domain.example {
+    @webhook path /whatsapp/webhook*
+    handle @webhook { reverse_proxy 127.0.0.1:8443 }
+    handle /ws*       { reverse_proxy 127.0.0.1:8082 }
+    handle /support*  { reverse_proxy 127.0.0.1:8081 }
+    handle            { reverse_proxy 127.0.0.1:8081 }
+}

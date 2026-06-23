@@ -31,3 +31,8 @@ support/data/
 
 # Rust
 rust/target/
+
+# docker deploy secrets/config
+deploy/.env
+deploy/config/config.yaml
+deploy/Caddyfile

@@ -7,3 +7,4 @@ build/
 .pytest_cache/
 *.db
 data/
+vendor/erp_client.py
