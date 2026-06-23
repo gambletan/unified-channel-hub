@@ -24,6 +24,23 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -v
 
+  support:
+    name: Support App Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # install the library (with channel extras) first, then the app + its dev deps
+      - run: pip install -e "./python[telegram,whatsapp]"
+      - run: pip install -e "./support[dev]"
+      - run: pytest -v
+        working-directory: support
+
   typescript:
     name: TypeScript Tests
     runs-on: ubuntu-latest
