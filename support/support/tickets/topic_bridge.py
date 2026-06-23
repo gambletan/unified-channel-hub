@@ -329,7 +329,10 @@ class TopicBridgeMiddleware(Middleware):
         try:
             cust_lang = self._user_lang.get(customer_chat_id, self.default_lang)
             target = _LANG_NAMES.get(cust_lang, cust_lang)
-            result = await self._voice_translator.transcribe_and_translate(audio, mime, target)
+            # The agent spoke the agents' language — hint it so the audio isn't mis-heard.
+            agent_lang = _LANG_NAMES.get(self.default_lang, self.default_lang)
+            result = await self._voice_translator.transcribe_and_translate(
+                audio, mime, target, source_hint=agent_lang)
             if not result:
                 await self.bot.send_message(
                     chat_id=self.group_chat_id, message_thread_id=thread_id,
@@ -359,7 +362,11 @@ class TopicBridgeMiddleware(Middleware):
             if not audio:
                 return
             target = _LANG_NAMES.get(self.default_lang, self.default_lang)
-            result = await self._voice_translator.transcribe_and_translate(audio, mime, target)
+            # Hint the customer's known language (if any) to steady transcription.
+            known = self._user_lang.get(msg.chat_id or "")
+            hint = _LANG_NAMES.get(known) if known else None
+            result = await self._voice_translator.transcribe_and_translate(
+                audio, mime, target, source_hint=hint)
             if not result:
                 return
             transcript, translation = result
