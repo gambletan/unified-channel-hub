@@ -61,6 +61,9 @@ class TicketMessage:
     to_id: str | None = None    # receiver: customer_id, agent.id, or "ai:{model}"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     delivered: bool = True       # False = queued for redelivery (e.g. webchat customer offline)
+    media_url: str | None = None     # data URI or URL for media replies (agent → customer)
+    media_type: str | None = None    # photo | video | voice | audio | document
+    media_filename: str | None = None
 
 
 @dataclass

@@ -71,11 +71,15 @@ class ChannelManager:
         reply_to_id: str | None = None,
         thread_id: str | None = None,
         parse_mode: str | None = None,
+        media_url: str | None = None,
+        media_type: str | None = None,
+        filename: str | None = None,
     ) -> str | None:
-        """Send a message to a specific channel + chat."""
+        """Send a message to a specific channel + chat (optionally with media)."""
         adapter = self._channels.get(channel)
         if not adapter:
             raise ValueError(f"channel not registered: {channel}")
+        metadata = {"filename": filename} if filename else {}
         return await adapter.send(
             OutboundMessage(
                 chat_id=chat_id,
@@ -83,6 +87,9 @@ class ChannelManager:
                 reply_to_id=reply_to_id,
                 thread_id=thread_id,
                 parse_mode=parse_mode,
+                media_url=media_url,
+                media_type=media_type,
+                metadata=metadata,
             )
         )
 

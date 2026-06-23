@@ -92,8 +92,16 @@ class TopicBridgeMiddleware(Middleware):
     def bot(self):
         return self.tg._app.bot
 
-    async def _send_to_customer(self, customer_chat_id: str, text: str, **kwargs) -> bool:
-        """Send a message to the customer via their original channel.
+    async def _send_to_customer(
+        self,
+        customer_chat_id: str,
+        text: str,
+        *,
+        media_url: str | None = None,
+        media_type: str | None = None,
+        filename: str | None = None,
+    ) -> bool:
+        """Send a message (optionally media) to the customer via their original channel.
 
         Returns True if the message was actually delivered, False if it could
         not be (e.g. a webchat customer whose socket is closed). This is what
@@ -103,11 +111,26 @@ class TopicBridgeMiddleware(Middleware):
         channel = self._customer_channel.get(customer_chat_id, "telegram")
         if channel == "telegram":
             try:
-                await self.bot.send_message(chat_id=int(customer_chat_id), text=text, **kwargs)
-                return True
+                cid = int(customer_chat_id)
             except (ValueError, TypeError):
                 logger.error("Invalid telegram chat_id (non-numeric): %s", customer_chat_id)
                 return False
+            try:
+                if media_url:
+                    buf = io.BytesIO(self._decode_media_url(media_url))
+                    buf.name = filename or f"file.{media_type or 'bin'}"
+                    cap = text or None
+                    if media_type in ("photo", "image"):
+                        await self.bot.send_photo(chat_id=cid, photo=buf, caption=cap)
+                    elif media_type == "video":
+                        await self.bot.send_video(chat_id=cid, video=buf, caption=cap)
+                    elif media_type in ("voice", "audio"):
+                        await self.bot.send_voice(chat_id=cid, voice=buf, caption=cap)
+                    else:
+                        await self.bot.send_document(chat_id=cid, document=buf, caption=cap)
+                else:
+                    await self.bot.send_message(chat_id=cid, text=text)
+                return True
             except Exception as e:
                 logger.warning("telegram send to %s failed: %s", customer_chat_id, e)
                 return False
@@ -115,7 +138,10 @@ class TopicBridgeMiddleware(Middleware):
             # ChannelManager.send() returns the adapter's result: a truthy id on
             # success, None when the adapter could not deliver (webchat: socket
             # not found or closed).
-            result = await self._send_fn(channel, customer_chat_id, text)
+            result = await self._send_fn(
+                channel, customer_chat_id, text,
+                media_url=media_url, media_type=media_type, filename=filename,
+            )
             return result is not None
         else:
             logger.warning("No send_fn for channel %s, cannot send to %s", channel, customer_chat_id)
@@ -129,14 +155,20 @@ class TopicBridgeMiddleware(Middleware):
         sender_id: str,
         thread_id: int,
         send_text: str | None = None,
+        media_url: str | None = None,
+        media_type: str | None = None,
+        filename: str | None = None,
     ) -> bool:
-        """Forward an agent's reply to the customer, persisting delivery status.
+        """Forward an agent's reply (text or media) to the customer, persisting delivery status.
 
         On success: stores the message delivered=True and acks "✅ 已发送给用户".
-        On failure (customer offline): stores delivered=False so it can be flushed
-        on reconnect, and acks "⚠️ ...离线" — never a false ✅.
+        On failure (customer offline): stores delivered=False (with its media) so it can be
+        flushed on reconnect, and acks "⚠️ ...离线" — never a false ✅.
         """
-        delivered = await self._send_to_customer(customer_chat_id, send_text if send_text is not None else text)
+        delivered = await self._send_to_customer(
+            customer_chat_id, send_text if send_text is not None else text,
+            media_url=media_url, media_type=media_type, filename=filename,
+        )
 
         ticket = await self.db.find_ticket_by_chat(customer_channel, customer_chat_id)
         if ticket:
@@ -149,6 +181,9 @@ class TopicBridgeMiddleware(Middleware):
                 from_id=sender_id,
                 to_id=ticket.customer_id,
                 delivered=delivered,
+                media_url=media_url,
+                media_type=media_type,
+                media_filename=filename,
             ))
 
         ack = "✅ 已发送给用户" if delivered else "⚠️ 用户当前离线，重新连接后将自动送达"
@@ -181,7 +216,10 @@ class TopicBridgeMiddleware(Middleware):
             return 0
         delivered_ids: list[int] = []
         for m in pending:
-            if await self._send_to_customer(customer_chat_id, m.content):
+            if await self._send_to_customer(
+                customer_chat_id, m.content,
+                media_url=m.media_url, media_type=m.media_type, filename=m.media_filename,
+            ):
                 delivered_ids.append(m.id)
             else:
                 break  # still offline — stop, keep order for next attempt
@@ -189,6 +227,65 @@ class TopicBridgeMiddleware(Middleware):
         if delivered_ids:
             logger.info("Flushed %d queued repl(ies) to %s", len(delivered_ids), customer_chat_id)
         return len(delivered_ids)
+
+    async def _forward_agent_media(self, msg, customer_chat_id: str, thread_id: int, sender_id: str) -> Any:
+        """Download an agent's Telegram media and forward it to the customer as a data URI
+        (so webchat clients can render it; telegram/whatsapp customers get the real file)."""
+        tg = msg.raw.message if (msg.raw is not None and hasattr(msg.raw, "message")) else None
+        media_type, file_id, filename, mime = self._extract_tg_media(tg)
+        if not file_id:
+            logger.warning("agent media with no resolvable file_id (thread %s)", thread_id)
+            return None
+        try:
+            f = await self.bot.get_file(file_id)
+            data = bytes(await f.download_as_bytearray())
+        except Exception as e:
+            logger.error("failed to download agent media: %s", e)
+            try:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id, message_thread_id=thread_id,
+                    text="❌ 媒体下载失败，未能发给用户",
+                )
+            except Exception:
+                pass
+            return None
+        data_uri = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+        await self._deliver_agent_reply(
+            customer_chat_id=customer_chat_id,
+            customer_channel=self._customer_channel.get(customer_chat_id, "telegram"),
+            text=msg.content.text or "",
+            sender_id=sender_id,
+            thread_id=thread_id,
+            media_url=data_uri,
+            media_type=media_type,
+            filename=filename,
+        )
+        return None
+
+    @staticmethod
+    def _extract_tg_media(tg) -> tuple:
+        """Return (media_type, file_id, filename, mime) from a python-telegram-bot Message."""
+        if tg is None:
+            return (None, None, None, None)
+        if getattr(tg, "photo", None):
+            return ("photo", tg.photo[-1].file_id, None, "image/jpeg")
+        if getattr(tg, "video", None):
+            v = tg.video
+            return ("video", v.file_id, getattr(v, "file_name", None), getattr(v, "mime_type", None) or "video/mp4")
+        if getattr(tg, "animation", None):
+            an = tg.animation
+            return ("video", an.file_id, getattr(an, "file_name", None), getattr(an, "mime_type", None) or "video/mp4")
+        if getattr(tg, "voice", None):
+            return ("voice", tg.voice.file_id, None, getattr(tg.voice, "mime_type", None) or "audio/ogg")
+        if getattr(tg, "audio", None):
+            a = tg.audio
+            return ("audio", a.file_id, getattr(a, "file_name", None), getattr(a, "mime_type", None) or "audio/mpeg")
+        if getattr(tg, "document", None):
+            d = tg.document
+            return ("document", d.file_id, getattr(d, "file_name", None), getattr(d, "mime_type", None) or "application/octet-stream")
+        if getattr(tg, "sticker", None):
+            return ("sticker", tg.sticker.file_id, None, "image/webp")
+        return (None, None, None, None)
 
     async def process(self, msg: UnifiedMessage, next_handler: Handler) -> Any:
         chat_id = msg.chat_id or ""
@@ -726,6 +823,11 @@ class TopicBridgeMiddleware(Middleware):
 
         # Cancel timeout
         self._cancel_timer(customer_chat_id)
+
+        # Agent sent media (photo/video/voice/doc) → download from Telegram and
+        # forward it to the customer (same delivery + offline-queue path as text).
+        if msg.content.type == ContentType.MEDIA:
+            return await self._forward_agent_media(msg, customer_chat_id, thread_id, sender_id)
 
         # Auto-translate agent reply to user's language
         user_lang = self._user_lang.get(customer_chat_id, self.default_lang)

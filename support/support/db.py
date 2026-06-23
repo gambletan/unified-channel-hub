@@ -54,7 +54,10 @@ CREATE TABLE IF NOT EXISTS ticket_messages (
     from_id TEXT,
     to_id TEXT,
     created_at TEXT NOT NULL,
-    delivered INTEGER DEFAULT 1
+    delivered INTEGER DEFAULT 1,
+    media_url TEXT,
+    media_type TEXT,
+    media_filename TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ticket ON ticket_messages(ticket_id);
 
@@ -163,6 +166,9 @@ class Database:
             ("ticket_messages", "from_id", "ALTER TABLE ticket_messages ADD COLUMN from_id TEXT"),
             ("ticket_messages", "to_id", "ALTER TABLE ticket_messages ADD COLUMN to_id TEXT"),
             ("ticket_messages", "delivered", "ALTER TABLE ticket_messages ADD COLUMN delivered INTEGER DEFAULT 1"),
+            ("ticket_messages", "media_url", "ALTER TABLE ticket_messages ADD COLUMN media_url TEXT"),
+            ("ticket_messages", "media_type", "ALTER TABLE ticket_messages ADD COLUMN media_type TEXT"),
+            ("ticket_messages", "media_filename", "ALTER TABLE ticket_messages ADD COLUMN media_filename TEXT"),
         ]
         for table, column, sql in migrations:
             try:
@@ -308,9 +314,9 @@ class Database:
 
     async def add_message(self, msg: TicketMessage, *, commit: bool = True) -> TicketMessage:
         async with self.db.execute(
-            """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, from_id, to_id, created_at, delivered)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, msg.from_id, msg.to_id, _iso(msg.created_at), 1 if msg.delivered else 0),
+            """INSERT INTO ticket_messages (ticket_id, role, sender_id, sender_name, content, channel, from_id, to_id, created_at, delivered, media_url, media_type, media_filename)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (msg.ticket_id, msg.role, msg.sender_id, msg.sender_name, msg.content, msg.channel, msg.from_id, msg.to_id, _iso(msg.created_at), 1 if msg.delivered else 0, msg.media_url, msg.media_type, msg.media_filename),
         ) as cur:
             msg.id = cur.lastrowid or 0
         if commit:
@@ -356,6 +362,9 @@ class Database:
                     to_id=r["to_id"] if "to_id" in r.keys() else None,
                     created_at=_parse_dt(r["created_at"]),
                     delivered=bool(r["delivered"]) if "delivered" in r.keys() else True,
+                    media_url=r["media_url"] if "media_url" in r.keys() else None,
+                    media_type=r["media_type"] if "media_type" in r.keys() else None,
+                    media_filename=r["media_filename"] if "media_filename" in r.keys() else None,
                 )
                 for r in rows
             ]
@@ -378,6 +387,9 @@ class Database:
                     to_id=r["to_id"] if "to_id" in r.keys() else None,
                     created_at=_parse_dt(r["created_at"]),
                     delivered=False,
+                    media_url=r["media_url"] if "media_url" in r.keys() else None,
+                    media_type=r["media_type"] if "media_type" in r.keys() else None,
+                    media_filename=r["media_filename"] if "media_filename" in r.keys() else None,
                 )
                 for r in rows
             ]
