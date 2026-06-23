@@ -133,6 +133,19 @@ async def run(config_path: str = "config.yaml") -> None:
         except Exception as e:
             logger.warning("ERP client init failed (non-fatal): %s", e)
 
+    # Optional Gemini voice transcription+translation for customer voice notes
+    voice_translator = None
+    vt_config = config.get("voice_translate", {})
+    if vt_config.get("enabled"):
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        if gemini_key:
+            from .ai.voice_translate import GeminiVoiceTranslator
+            vt_model = vt_config.get("model", "gemini-flash-lite-latest")
+            voice_translator = GeminiVoiceTranslator(api_key=gemini_key, model=vt_model)
+            logger.info("Voice translation enabled (Gemini %s)", vt_model)
+        else:
+            logger.warning("voice_translate.enabled but GEMINI_API_KEY not set — disabled")
+
     # Topic bridge: DMs ↔ agent group forum topics
     tb_config = config.get("topic_bridge", {})
     if tb_config.get("group_chat_id"):
@@ -150,6 +163,7 @@ async def run(config_path: str = "config.yaml") -> None:
                 sensitive_words=tb_config.get("sensitive_words"),
                 erp_client=erp_client,
                 send_fn=manager.send,
+                voice_translator=voice_translator,
             ))
             logger.info("Topic bridge enabled for group %s", tb_config["group_chat_id"])
 

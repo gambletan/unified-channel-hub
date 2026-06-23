@@ -306,3 +306,20 @@ def test_extract_tg_media_photo_and_video():
     assert TopicBridgeMiddleware._extract_tg_media(video_msg) == ("video", "vid1", "clip.mp4", "video/mp4")
 
     assert TopicBridgeMiddleware._extract_tg_media(None) == (None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_voice_translation_posts_transcript_and_translation(db):
+    """A customer voice note → bot posts 🎤 transcript + 🌐 translation into the topic."""
+    vt = MagicMock()
+    vt.transcribe_and_translate = AsyncMock(return_value=("你好，订单没收到", "Hi, order not received"))
+    tg = MagicMock(); tg._app.bot = AsyncMock()
+    bridge = TopicBridgeMiddleware(
+        db, tg, group_chat_id=-100, router=MagicMock(), agent_ids={"a1"}, voice_translator=vt)
+    msg = MagicMock()
+    msg.content.media_url = "data:audio/ogg;base64,AAAA"  # tiny valid base64
+    msg.raw = None
+    await bridge._post_voice_translation(msg, topic_id=5)
+    vt.transcribe_and_translate.assert_awaited_once()
+    posted = bridge.bot.send_message.call_args.kwargs["text"]
+    assert "🎤" in posted and "你好，订单没收到" in posted and "Hi, order not received" in posted

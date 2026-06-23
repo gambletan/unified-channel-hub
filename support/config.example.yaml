@@ -48,6 +48,12 @@ knowledge:
   path: ./knowledge
   reindex_on_start: true
 
+# Transcribe + translate customer voice notes into the agents' language (Gemini).
+# Needs GEMINI_API_KEY in the environment.
+voice_translate:
+  enabled: false
+  model: gemini-flash-lite-latest
+
 topic_bridge:
   group_chat_id: -1001234567890         # Telegram forum group ID
   agent_ids: ["123456789", "987654321"] # Telegram user IDs of CS agents
