@@ -347,6 +347,9 @@ async def test_agent_voice_sent_to_customer_as_translated_text(db):
     msg = MagicMock(); msg.raw.message = raw_msg; msg.content.text = ""; msg.content.media_type = "voice"
 
     await bridge._forward_agent_media(msg, "s1", thread_id=7, sender_id="a1")
+    # the voice→text send is fire-and-forget; let the background task finish
+    import asyncio
+    await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
 
     vt.transcribe_and_translate.assert_awaited_once()
     assert vt.transcribe_and_translate.call_args.args[2] == "English"  # customer's language
