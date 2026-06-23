@@ -323,3 +323,32 @@ async def test_voice_translation_posts_transcript_and_translation(db):
     vt.transcribe_and_translate.assert_awaited_once()
     posted = bridge.bot.send_message.call_args.kwargs["text"]
     assert "🎤" in posted and "你好，订单没收到" in posted and "Hi, order not received" in posted
+
+
+@pytest.mark.asyncio
+async def test_agent_voice_sent_to_customer_as_translated_text(db):
+    """Agent sends a voice note → customer receives TEXT in their language, no audio."""
+    vt = MagicMock()
+    vt.transcribe_and_translate = AsyncMock(return_value=("你好，已发货", "Hi, shipped"))
+    sent = []
+    async def send_fn(channel, chat_id, text, *, media_url=None, media_type=None, filename=None):
+        sent.append({"text": text, "media_url": media_url}); return "ok"
+    tg = MagicMock(); tg._app.bot = AsyncMock()
+    file_mock = MagicMock(); file_mock.download_as_bytearray = AsyncMock(return_value=bytearray(b"audio"))
+    tg._app.bot.get_file = AsyncMock(return_value=file_mock)
+    bridge = TopicBridgeMiddleware(
+        db, tg, group_chat_id=-100, router=MagicMock(),
+        agent_ids={"a1"}, send_fn=send_fn, voice_translator=vt)
+    bridge._customer_channel["s1"] = "webchat"
+    bridge._user_lang["s1"] = "en"
+    t = Ticket(channel="webchat", chat_id="s1", customer_id="u1"); await db.create_ticket(t)
+
+    raw_msg = MagicMock(spec=["voice"]); raw_msg.voice = MagicMock(file_id="v1", mime_type="audio/ogg")
+    msg = MagicMock(); msg.raw.message = raw_msg; msg.content.text = ""; msg.content.media_type = "voice"
+
+    await bridge._forward_agent_media(msg, "s1", thread_id=7, sender_id="a1")
+
+    vt.transcribe_and_translate.assert_awaited_once()
+    assert vt.transcribe_and_translate.call_args.args[2] == "English"  # customer's language
+    assert any(c["text"] == "Hi, shipped" for c in sent)              # got the translation
+    assert all(c["media_url"] is None for c in sent)                  # NO audio forwarded
