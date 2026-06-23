@@ -21,8 +21,21 @@ channels:
 ai:
   backend: minimax
   api_key: "${AI_API_KEY}"
-  model: MiniMax-Text-01
+  model: MiniMax-M2.7-highspeed   # reasoning model for actual answers
   temperature: 0.3
+  # Route light tasks to a cheaper/faster non-reasoning model: ~45% faster, no
+  # wasted reasoning tokens, and no <think> to strip. Keep ai_reply on the
+  # reasoning model for answer quality.
+  backends:
+    minimax_fast:
+      api_key: "${AI_API_KEY}"
+      base_url: https://api.minimaxi.com/v1
+      model: MiniMax-Text-01
+  routing:
+    translate: minimax_fast
+    detect_lang: minimax_fast
+    summarize: minimax_fast
+    ai_reply: minimax
   system_prompt: |
     You are a professional, friendly customer support agent.
     Answer based on knowledge base and customer info provided.
