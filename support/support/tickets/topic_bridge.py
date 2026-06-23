@@ -131,6 +131,8 @@ class TopicBridgeMiddleware(Middleware):
             logger.warning("stripped residual <think> from customer reply to %s", customer_chat_id)
             text = strip_think(text)
             await self._alert_think_leak()
+            if not text and not media_url:
+                return False  # reply was nothing but reasoning — nothing real to send
 
         channel = self._customer_channel.get(customer_chat_id, "telegram")
         if channel == "telegram":
