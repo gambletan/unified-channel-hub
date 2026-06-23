@@ -65,3 +65,12 @@ async def test_no_api_key_returns_none_without_calling():
     out = await GeminiVoiceTranslator(api_key="").transcribe_and_translate(
         b"x", "audio/ogg", "English")
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_parses_json_wrapped_in_prose():
+    resp = _gemini_resp('Sure! Here is the result:\n{"transcript":"a","translation":"b"}\nHope it helps.')
+    with patch("httpx.AsyncClient", return_value=_client_returning(resp)):
+        out = await GeminiVoiceTranslator(api_key="k").transcribe_and_translate(
+            b"x", "audio/ogg", "English")
+    assert out == ("a", "b")
