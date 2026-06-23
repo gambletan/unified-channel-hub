@@ -251,6 +251,13 @@ class TopicBridgeMiddleware(Middleware):
             except Exception:
                 pass
             return None
+
+        # Agent voice/audio → the customer just gets TEXT in their own language
+        # (transcribe + translate), not the audio.
+        if media_type in ("voice", "audio") and self._voice_translator:
+            await self._send_agent_voice_as_text(data, mime, customer_chat_id, thread_id, sender_id)
+            return None
+
         data_uri = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
         await self._deliver_agent_reply(
             customer_chat_id=customer_chat_id,
@@ -288,6 +295,39 @@ class TopicBridgeMiddleware(Middleware):
         if getattr(tg, "sticker", None):
             return ("sticker", tg.sticker.file_id, None, "image/webp")
         return (None, None, None, None)
+
+    async def _send_agent_voice_as_text(
+        self, audio: bytes, mime: str, customer_chat_id: str, thread_id: int, sender_id: str
+    ) -> None:
+        """Agent voice → transcribe + translate into the customer's language, send as text."""
+        cust_lang = self._user_lang.get(customer_chat_id, self.default_lang)
+        target = _LANG_NAMES.get(cust_lang, cust_lang)
+        result = await self._voice_translator.transcribe_and_translate(audio, mime, target)
+        if not result:
+            try:
+                await self.bot.send_message(
+                    chat_id=self.group_chat_id, message_thread_id=thread_id,
+                    text="⚠️ 语音转译失败，未发给用户",
+                )
+            except Exception:
+                pass
+            return
+        transcript, translation = result
+        try:
+            await self.bot.send_message(
+                chat_id=self.group_chat_id, message_thread_id=thread_id,
+                text=f"🎤 语音转写: {transcript}",
+            )
+        except Exception:
+            pass
+        # Deliver the translated text to the customer (reuses delivery + offline queue + ack).
+        await self._deliver_agent_reply(
+            customer_chat_id=customer_chat_id,
+            customer_channel=self._customer_channel.get(customer_chat_id, "telegram"),
+            text=translation,
+            sender_id=sender_id,
+            thread_id=thread_id,
+        )
 
     async def _post_voice_translation(self, msg: UnifiedMessage, topic_id: int) -> None:
         """Transcribe + translate a customer voice note and post it into the topic."""
