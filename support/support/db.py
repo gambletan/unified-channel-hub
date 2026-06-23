@@ -346,28 +346,28 @@ class Database:
             row = await cur.fetchone()
             return row[0] if row else 0
 
+    def _row_to_message(self, r) -> TicketMessage:
+        keys = r.keys()
+        return TicketMessage(
+            id=r["id"], ticket_id=r["ticket_id"], role=r["role"],
+            sender_id=r["sender_id"], sender_name=r["sender_name"],
+            content=r["content"], channel=r["channel"],
+            from_id=r["from_id"] if "from_id" in keys else None,
+            to_id=r["to_id"] if "to_id" in keys else None,
+            created_at=_parse_dt(r["created_at"]),
+            delivered=bool(r["delivered"]) if "delivered" in keys else True,
+            media_url=r["media_url"] if "media_url" in keys else None,
+            media_type=r["media_type"] if "media_type" in keys else None,
+            media_filename=r["media_filename"] if "media_filename" in keys else None,
+        )
+
     async def get_messages(self, ticket_id: str, limit: int = 100) -> list[TicketMessage]:
         async with self.db.execute(
             """SELECT * FROM ticket_messages WHERE ticket_id = ?
                ORDER BY created_at ASC LIMIT ?""",
             (ticket_id, limit),
         ) as cur:
-            rows = await cur.fetchall()
-            return [
-                TicketMessage(
-                    id=r["id"], ticket_id=r["ticket_id"], role=r["role"],
-                    sender_id=r["sender_id"], sender_name=r["sender_name"],
-                    content=r["content"], channel=r["channel"],
-                    from_id=r["from_id"] if "from_id" in r.keys() else None,
-                    to_id=r["to_id"] if "to_id" in r.keys() else None,
-                    created_at=_parse_dt(r["created_at"]),
-                    delivered=bool(r["delivered"]) if "delivered" in r.keys() else True,
-                    media_url=r["media_url"] if "media_url" in r.keys() else None,
-                    media_type=r["media_type"] if "media_type" in r.keys() else None,
-                    media_filename=r["media_filename"] if "media_filename" in r.keys() else None,
-                )
-                for r in rows
-            ]
+            return [self._row_to_message(r) for r in await cur.fetchall()]
 
     async def get_undelivered_agent_messages(self, ticket_id: str) -> list[TicketMessage]:
         """Agent replies not yet delivered to the customer, oldest first."""
@@ -377,22 +377,7 @@ class Database:
                ORDER BY created_at ASC, id ASC""",
             (ticket_id,),
         ) as cur:
-            rows = await cur.fetchall()
-            return [
-                TicketMessage(
-                    id=r["id"], ticket_id=r["ticket_id"], role=r["role"],
-                    sender_id=r["sender_id"], sender_name=r["sender_name"],
-                    content=r["content"], channel=r["channel"],
-                    from_id=r["from_id"] if "from_id" in r.keys() else None,
-                    to_id=r["to_id"] if "to_id" in r.keys() else None,
-                    created_at=_parse_dt(r["created_at"]),
-                    delivered=False,
-                    media_url=r["media_url"] if "media_url" in r.keys() else None,
-                    media_type=r["media_type"] if "media_type" in r.keys() else None,
-                    media_filename=r["media_filename"] if "media_filename" in r.keys() else None,
-                )
-                for r in rows
-            ]
+            return [self._row_to_message(r) for r in await cur.fetchall()]
 
     async def mark_messages_delivered(self, message_ids: list[int]) -> None:
         """Mark the given message ids as delivered."""
