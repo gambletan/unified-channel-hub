@@ -68,6 +68,7 @@ class TopicBridgeMiddleware(Middleware):
         sensitive_words: list[str] | None = None,
         erp_client: Any | None = None,
         send_fn: Any | None = None,
+        voice_translator: Any | None = None,
     ):
         self.db = db
         self.tg = tg_adapter
@@ -79,6 +80,7 @@ class TopicBridgeMiddleware(Middleware):
         self.sensitive_words = sensitive_words or _DEFAULT_SENSITIVE
         self.erp = erp_client  # Optional ERPClient for user info lookups
         self._send_fn = send_fn  # ChannelManager.send() for multi-channel reply
+        self._voice_translator = voice_translator  # optional GeminiVoiceTranslator for voice notes
 
         # Caches
         self._topic_cache: dict[str, int] = {}      # customer_chat_id → thread_id
@@ -286,6 +288,38 @@ class TopicBridgeMiddleware(Middleware):
         if getattr(tg, "sticker", None):
             return ("sticker", tg.sticker.file_id, None, "image/webp")
         return (None, None, None, None)
+
+    async def _post_voice_translation(self, msg: UnifiedMessage, topic_id: int) -> None:
+        """Transcribe + translate a customer voice note and post it into the topic."""
+        try:
+            audio, mime = await self._get_audio_bytes(msg)
+            if not audio:
+                return
+            target = _LANG_NAMES.get(self.default_lang, self.default_lang)
+            result = await self._voice_translator.transcribe_and_translate(audio, mime, target)
+            if not result:
+                return
+            transcript, translation = result
+            await self.bot.send_message(
+                chat_id=self.group_chat_id,
+                message_thread_id=topic_id,
+                text=f"🎤 [语音转写] {transcript}\n🌐 [译文] {translation}",
+            )
+        except Exception as e:
+            logger.warning("voice translation failed: %s", e)
+
+    async def _get_audio_bytes(self, msg: UnifiedMessage) -> tuple[bytes | None, str]:
+        """Best-effort fetch of audio bytes + mime from a customer voice/audio message."""
+        media_url = msg.content.media_url
+        if media_url and media_url.startswith("data:"):
+            mime = media_url[5:].split(";", 1)[0] or "audio/ogg"
+            return self._decode_media_url(media_url), mime
+        tg = msg.raw.message if (msg.raw is not None and hasattr(msg.raw, "message")) else None
+        _mt, file_id, _fn, mime = self._extract_tg_media(tg)
+        if file_id:
+            f = await self.bot.get_file(file_id)
+            return bytes(await f.download_as_bytearray()), (mime or "audio/ogg")
+        return None, "audio/ogg"
 
     async def process(self, msg: UnifiedMessage, next_handler: Handler) -> Any:
         chat_id = msg.chat_id or ""
@@ -699,6 +733,11 @@ class TopicBridgeMiddleware(Middleware):
         media_label = f"👤 [{media_type}]"
         if text:
             media_label += f" {display_text}"
+
+        # Voice/audio → transcribe + translate to the agents' language (best-effort,
+        # never blocks the audio forward below).
+        if media_type in ("voice", "audio") and self._voice_translator:
+            await self._post_voice_translation(msg, topic_id)
 
         # --- Telegram native forward ---
         tg_msg = None
