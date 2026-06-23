@@ -28,6 +28,8 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+from .backends import strip_think
+
 logger = logging.getLogger("model_router")
 
 # Task names used throughout the system
@@ -297,7 +299,7 @@ class ModelRouter:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            return strip_think(data["choices"][0]["message"]["content"])
 
     def summary(self) -> list[str]:
         """Return human-readable summary lines for logging."""

@@ -69,3 +69,35 @@ def test_stream_lone_lt_is_not_swallowed():
     # a real '<' that is not the start of a think tag must still be delivered
     out, _ = _drain(["price < ", "100 ok"])
     assert out == "price < 100 ok"
+
+
+# --- ModelRouter.chat (translation / detect_lang / summarize path) ---
+# This is a SEPARATE model-call path from backends.py; it also must strip <think>.
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from support.ai.model_router import ModelRouter, BackendConfig
+
+
+def _router():
+    return ModelRouter(
+        backends={"minimax": BackendConfig(name="minimax", base_url="http://x/v1", api_key="k", model="m")},
+        task_routing={"translate": "minimax"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_router_chat_strips_think():
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value={
+        "choices": [{"message": {"content": "<think>\nThe user wants a translation.\n</think>\n\n这是什么风格？"}}]
+    })
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=resp)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch("httpx.AsyncClient", return_value=client):
+        out = await _router().chat("translate", [{"role": "user", "content": "what style is this?"}])
+    assert out == "这是什么风格？"
+    assert "<think>" not in out
